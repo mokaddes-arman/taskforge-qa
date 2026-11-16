@@ -5,6 +5,16 @@ export const SCHEDULE_FILTERS = ['Departments', 'Offices'] as const;
 
 export type ScheduleFilter = (typeof SCHEDULE_FILTERS)[number];
 
+export const SCHEDULE_VIEWS = ['Day', 'Week', 'Month'] as const;
+
+export type ScheduleView = (typeof SCHEDULE_VIEWS)[number];
+
+export interface MonthViewCell {
+  label: string;
+  day: number;
+  shifts: number;
+}
+
 export interface EmployeeRow {
   name: string;
   hours: string;
@@ -18,6 +28,10 @@ export interface WeekRange {
 
 const DAY_MS = 86_400_000;
 const WEEK_LABEL = /^[A-Z][a-z]{2} \d{1,2} – [A-Z][a-z]{2} \d{1,2}, \d{4}$/;
+const DAY_LABEL = /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), [A-Z][a-z]{2} \d{1,2}, \d{4}$/;
+const MONTH_LABEL = /^[A-Z][a-z]+ \d{4}$/;
+const MONTH_CELL_LABEL =
+  /^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), [A-Z][a-z]+ \d{1,2}: (\d+) shifts?$/;
 const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
 const MONTHS: Readonly<Record<string, number>> = {
   Jan: 0,
@@ -96,6 +110,19 @@ export class SchedulePage extends AppShellPage {
   readonly filterDialog: Locator;
   readonly addShiftDialog: Locator;
   readonly myShiftsEmptyMessage: Locator;
+  readonly viewToggle: Locator;
+  readonly dayViewButton: Locator;
+  readonly weekViewButton: Locator;
+  readonly monthViewButton: Locator;
+  readonly dayLabel: Locator;
+  readonly monthLabel: Locator;
+  readonly previousDayButton: Locator;
+  readonly nextDayButton: Locator;
+  readonly todayButton: Locator;
+  readonly previousMonthButton: Locator;
+  readonly nextMonthButton: Locator;
+  readonly thisMonthButton: Locator;
+  readonly monthCells: Locator;
 
   constructor(page: Page, options: ShellPageOptions = {}) {
     super(page, options);
@@ -148,6 +175,50 @@ export class SchedulePage extends AppShellPage {
       'You have no shifts this week.',
       { exact: true },
     );
+    this.viewToggle = this.main.getByRole('radiogroup', {
+      name: 'Schedule view',
+    });
+    this.dayViewButton = this.main.getByRole('radio', {
+      name: 'Day',
+      exact: true,
+    });
+    this.weekViewButton = this.main.getByRole('radio', {
+      name: 'Week',
+      exact: true,
+    });
+    this.monthViewButton = this.main.getByRole('radio', {
+      name: 'Month',
+      exact: true,
+    });
+    this.dayLabel = this.main.getByText(DAY_LABEL).first();
+    this.monthLabel = this.main.getByText(MONTH_LABEL).first();
+    this.previousDayButton = this.main.getByRole('button', {
+      name: 'Previous day',
+      exact: true,
+    });
+    this.nextDayButton = this.main.getByRole('button', {
+      name: 'Next day',
+      exact: true,
+    });
+    this.todayButton = this.main.getByRole('button', {
+      name: 'Today',
+      exact: true,
+    });
+    this.previousMonthButton = this.main.getByRole('button', {
+      name: 'Previous month',
+      exact: true,
+    });
+    this.nextMonthButton = this.main.getByRole('button', {
+      name: 'Next month',
+      exact: true,
+    });
+    this.thisMonthButton = this.main.getByRole('button', {
+      name: 'This month',
+      exact: true,
+    });
+    this.monthCells = this.main.getByRole('button', {
+      name: MONTH_CELL_LABEL,
+    });
   }
 
   async goto(): Promise<void> {
@@ -175,6 +246,11 @@ export class SchedulePage extends AppShellPage {
 
     await expect(this.table).toBeVisible();
     await expect(this.laborCost).toContainText('Scheduled labor cost');
+    await expect(this.viewToggle).toBeVisible();
+    await expect(this.dayViewButton).toBeVisible();
+    await expect(this.weekViewButton).toBeVisible();
+    await expect(this.monthViewButton).toBeVisible();
+    await expect(this.weekViewButton).toHaveAttribute('aria-checked', 'true');
 
     await this.expectWeekGrid();
     await this.expectEmployeeRows();
@@ -189,6 +265,204 @@ export class SchedulePage extends AppShellPage {
 
   async weekRange(): Promise<WeekRange> {
     return parseWeekLabel(await this.weekLabelText());
+  }
+
+  async currentView(): Promise<ScheduleView> {
+    for (const view of SCHEDULE_VIEWS) {
+      const checked = await this.viewButton(view).getAttribute('aria-checked');
+
+      if (checked === 'true') {
+        return view;
+      }
+    }
+
+    throw new Error('No schedule view is selected');
+  }
+
+  async selectView(view: ScheduleView): Promise<void> {
+    await this.viewButton(view).click();
+    await expect(this.viewButton(view)).toHaveAttribute('aria-checked', 'true');
+
+    if (view === 'Day') {
+      await expect(this.dayLabel).toBeVisible();
+      await expect(this.previousDayButton).toBeVisible();
+    } else if (view === 'Month') {
+      await expect(this.monthLabel).toBeVisible();
+      await expect(this.previousMonthButton).toBeVisible();
+    } else {
+      await expect(this.weekLabel).toBeVisible();
+      await expect(this.previousWeekButton).toBeVisible();
+    }
+
+    await this.waitForSkeletonsToClear();
+  }
+
+  async dayLabelText(): Promise<string> {
+    return ((await this.dayLabel.textContent()) ?? '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  async monthLabelText(): Promise<string> {
+    return ((await this.monthLabel.textContent()) ?? '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  /** Day view exposes one column per working hour, 08:00–17:00. */
+  async expectDayView(): Promise<void> {
+    expect(await this.currentView()).toBe('Day');
+    await expect(this.dayLabel).toHaveText(DAY_LABEL);
+    await expect(this.previousDayButton).toBeVisible();
+    await expect(this.nextDayButton).toBeVisible();
+    await expect(this.todayButton).toBeVisible();
+
+    for (const hour of [
+      '08:00',
+      '09:00',
+      '10:00',
+      '11:00',
+      '12:00',
+      '13:00',
+      '14:00',
+      '15:00',
+      '16:00',
+      '17:00',
+    ]) {
+      await expect(
+        this.main.getByText(hour, { exact: true }).first(),
+        `Day view should show the ${hour} hour column`,
+      ).toBeVisible();
+    }
+
+    expect(
+      await this.main
+        .getByRole('button', { name: /^Add a shift for .+ on / })
+        .count(),
+      'Day view add-shift actions',
+    ).toBeGreaterThan(0);
+    await this.expectNoBrokenValues();
+  }
+
+  /** Month view renders a six-week grid with an accessible label per day. */
+  async expectMonthView(): Promise<void> {
+    expect(await this.currentView()).toBe('Month');
+    await expect(this.monthLabel).toHaveText(MONTH_LABEL);
+    await expect(this.previousMonthButton).toBeVisible();
+    await expect(this.nextMonthButton).toBeVisible();
+    await expect(this.thisMonthButton).toBeVisible();
+
+    for (const day of DAY_NAMES) {
+      await expect(
+        this.main.getByText(day, { exact: true }).first(),
+        `Month view should show the ${day} weekday heading`,
+      ).toBeVisible();
+    }
+
+    const cells = await this.monthViewCells();
+
+    expect(cells, 'Month view day cells').toHaveLength(42);
+
+    for (const cell of cells) {
+      expect(cell.label, 'Month view day label').toMatch(
+        /^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), [A-Z][a-z]+ \d{1,2}$/,
+      );
+      expect(cell.shifts, `Shift count for ${cell.label}`).toBeGreaterThanOrEqual(
+        0,
+      );
+    }
+
+    await this.expectNoBrokenValues();
+  }
+
+  async monthViewCells(): Promise<MonthViewCell[]> {
+    return this.monthCells.evaluateAll((cells) =>
+      cells.map((cell) => {
+        const label = (cell.getAttribute('aria-label') ?? '')
+          .replace(/\s+/g, ' ')
+          .trim();
+        const match = label.match(/: (\d+) shifts?$/);
+        const day = label.match(/, [A-Z][a-z]+ (\d{1,2})/);
+
+        return {
+          label: label.replace(/: \d+ shifts?$/, ''),
+          day: day ? Number(day[1]) : 0,
+          shifts: match ? Number(match[1]) : 0,
+        };
+      }),
+    );
+  }
+
+  async nextDay(): Promise<void> {
+    const before = await this.dayLabelText();
+
+    await this.nextDayButton.click();
+    await expect
+      .poll(() => this.dayLabelText(), {
+        message: 'Expected Next day to advance the day view by one day',
+      })
+      .not.toBe(before);
+  }
+
+  async previousDay(): Promise<void> {
+    const before = await this.dayLabelText();
+
+    await this.previousDayButton.click();
+    await expect
+      .poll(() => this.dayLabelText(), {
+        message: 'Expected Previous day to move the day view back one day',
+      })
+      .not.toBe(before);
+  }
+
+  async goToToday(expectedLabel?: string): Promise<void> {
+    await this.todayButton.click();
+
+    if (expectedLabel) {
+      await expect
+        .poll(() => this.dayLabelText(), {
+          message: `Expected Today to return to "${expectedLabel}"`,
+        })
+        .toBe(expectedLabel);
+    }
+  }
+
+  async nextMonth(): Promise<void> {
+    const before = await this.monthLabelText();
+
+    await this.nextMonthButton.click();
+    await expect
+      .poll(() => this.monthLabelText(), {
+        message: 'Expected Next month to advance the month view',
+      })
+      .not.toBe(before);
+  }
+
+  async previousMonth(): Promise<void> {
+    const before = await this.monthLabelText();
+
+    await this.previousMonthButton.click();
+    await expect
+      .poll(() => this.monthLabelText(), {
+        message: 'Expected Previous month to move the month view back',
+      })
+      .not.toBe(before);
+  }
+
+  async goToThisMonth(expectedLabel?: string): Promise<void> {
+    await this.thisMonthButton.click();
+
+    if (expectedLabel) {
+      await expect
+        .poll(() => this.monthLabelText(), {
+          message: `Expected This month to return to "${expectedLabel}"`,
+        })
+        .toBe(expectedLabel);
+    }
+  }
+
+  viewButton(view: ScheduleView): Locator {
+    return this.main.getByRole('radio', { name: view, exact: true });
   }
 
   async dayHeaders(): Promise<string[]> {

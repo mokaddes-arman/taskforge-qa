@@ -411,12 +411,44 @@ export class LaborCostPage extends AppShellPage {
   async expectEmptyOrResults(): Promise<void> {
     await this.waitForReport();
 
-    if (await this.table.isVisible()) {
+    if ((await this.settledReportState()) === 'table') {
       await this.expectResults();
       return;
     }
 
     await this.expectEmptyState();
+  }
+
+  /**
+   * After a range change the previous empty state can stay on screen briefly
+   * before the new results table renders. Wait until the same state is seen on
+   * consecutive polls before deciding which branch to assert.
+   */
+  private async settledReportState(): Promise<'table' | 'empty'> {
+    let last = '';
+    let stableReads = 0;
+
+    await expect
+      .poll(
+        async () => {
+          const state = (await this.table.isVisible())
+            ? 'table'
+            : (await this.emptyStateMessage.isVisible())
+              ? 'empty'
+              : 'pending';
+
+          stableReads = state !== 'pending' && state === last ? stableReads + 1 : 0;
+          last = state;
+          return stableReads >= 2;
+        },
+        {
+          message: 'Labor cost report should settle on results or an empty state',
+          intervals: [500],
+        },
+      )
+      .toBe(true);
+
+    return last as 'table' | 'empty';
   }
 
   async expectEmptyState(): Promise<void> {

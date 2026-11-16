@@ -23,7 +23,11 @@
     "test:modules:firefox": "playwright test --project=modules-firefox",
     "test:modules:webkit": "playwright test --project=modules-webkit",
     "test:ui": "playwright test --ui",
-    "report": "playwright show-report"
+    "report": "playwright show-report",
+    "test:serial": "playwright test --workers=1",
+    "test:headed": "playwright test --headed",
+    "dashboard": "node scripts/open-dashboard.js",
+    "test:report": "playwright test; playwright show-report"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",

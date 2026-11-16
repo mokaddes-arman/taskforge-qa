@@ -17,7 +17,7 @@ export const HOME_KPIS: readonly KpiDefinition[] = [
     label: 'Hours this week',
     valuePattern: /^(?:\d+h(?: \d+m)?|\d+m)$/,
   },
-  { label: 'Est. labor cost', valuePattern: /^\$[\d,]+\.\d{2}$/ },
+  { label: 'Labor cost', valuePattern: /^\$[\d,]+\.\d{2}$/ },
 ] as const;
 
 export const SETUP_LINKS: Readonly<Record<string, string>> = {
@@ -27,13 +27,15 @@ export const SETUP_LINKS: Readonly<Record<string, string>> = {
   'Build the schedule': '/schedule',
 } as const;
 
-export const QUICK_ACCESS_LINKS: Readonly<Record<string, string>> = {
-  Tasks: '/tasks',
-  Schedule: '/schedule',
-  'Working now': '/working-now',
-  Timesheets: '/timesheets',
-  Chat: '/chat',
-  'Labor cost': '/reports/labor-cost',
+/**
+ * Non-mutating dashboard shortcuts. The 16 Nov release removed the old
+ * "Quick access" grid; these are the equivalent links still on the dashboard.
+ */
+export const DASHBOARD_SHORTCUTS: Readonly<Record<string, string>> = {
+  'All tasks': '/tasks',
+  'My schedule': '/schedule?mine=1',
+  'Open leave calendar': '/leave?tab=calendar',
+  'See all': '/announcements',
 } as const;
 
 /**
@@ -54,10 +56,11 @@ export class HomePage extends AppShellPage {
   readonly myTasksLink: Locator;
   readonly setupCard: Locator;
   readonly setupLinks: Locator;
+  readonly businessNumbers: Locator;
   readonly taskStatusHeading: Locator;
   readonly completionImage: Locator;
-  readonly needsAttentionHeading: Locator;
-  readonly quickAccessLabel: Locator;
+  readonly needsAttentionSection: Locator;
+  readonly myTasksLabel: Locator;
   readonly latestAnnouncementsHeading: Locator;
   readonly whosOutHeading: Locator;
   readonly holidaysHeading: Locator;
@@ -74,21 +77,22 @@ export class HomePage extends AppShellPage {
       .getByRole('heading', { level: 1 })
       .first();
     this.welcomeCopy = this.main
-      .getByText(/Here.s what.s happening in .* today\.?/i)
+      .getByText(
+        /(?:Here.s what.s happening in .* today\.?|You.re all caught up in .+\.)/i,
+      )
       .first();
     this.businessOverview = page.getByRole('region', {
-      name: 'Business overview',
+      name: 'Business at a glance',
       exact: true,
     });
     this.businessOverviewHeading = this.businessOverview.getByRole('heading', {
-      name: 'Business overview',
+      name: 'At a glance',
       level: 2,
     });
-    this.myDay = page.getByRole('region', { name: 'My day', exact: true });
-    this.myDayHeading = this.myDay.getByRole('heading', {
-      name: 'My day',
-      level: 2,
-    });
+    this.myDay = page.getByRole('complementary', { name: 'My day' });
+    // The sidebar "My day" panel no longer renders a heading; "Today" is the
+    // first visible block label.
+    this.myDayHeading = this.myDay.getByText('Today', { exact: true }).first();
     this.newTaskButton = this.main.getByRole('button', {
       name: 'New task',
       exact: true,
@@ -101,7 +105,7 @@ export class HomePage extends AppShellPage {
       name: 'Close',
     });
     this.myTasksLink = this.main.getByRole('link', {
-      name: 'My tasks',
+      name: 'All tasks',
       exact: true,
     });
     this.setupCard = this.main
@@ -109,34 +113,30 @@ export class HomePage extends AppShellPage {
       .filter({ has: page.getByText('Get set up', { exact: true }) })
       .first();
     this.setupLinks = this.setupCard.getByRole('link');
-    this.taskStatusHeading = this.businessOverview.getByText('Task status', {
+    this.businessNumbers = this.businessOverview.getByRole('group', {
+      name: 'Business numbers',
+    });
+    this.taskStatusHeading = this.main.getByText('Task status', {
       exact: true,
     });
-    this.completionImage = this.businessOverview.getByRole('img', {
+    this.completionImage = this.main.getByRole('img', {
       name: /% completed/i,
     });
-    this.needsAttentionHeading = this.businessOverview.getByText(
-      'Needs attention',
-      { exact: true },
-    );
-    this.quickAccessLabel = this.businessOverview.getByText('Quick access', {
+    this.needsAttentionSection = page.getByRole('region', {
+      name: 'Needs attention',
       exact: true,
     });
-    this.latestAnnouncementsHeading = this.businessOverview.getByText(
-      'Latest announcements',
-      { exact: true },
-    );
-    this.whosOutHeading = this.businessOverview
-      .getByText(/Who.s out/i)
-      .first();
-    this.holidaysHeading = this.businessOverview.getByText(
-      'Upcoming holidays',
-      { exact: true },
-    );
-    this.headcountHeading = this.businessOverview.getByText(
-      'Headcount by department',
-      { exact: true },
-    );
+    this.myTasksLabel = this.main.getByText('My tasks', { exact: true }).first();
+    this.latestAnnouncementsHeading = this.myDay.getByText('Announcements', {
+      exact: true,
+    });
+    this.whosOutHeading = this.main.getByText(/Who.s out/i).first();
+    this.holidaysHeading = this.main.getByText('Upcoming holidays', {
+      exact: true,
+    });
+    this.headcountHeading = this.main.getByText('Headcount by department', {
+      exact: true,
+    });
     this.myScheduleLink = this.myDay.getByRole('link', {
       name: 'My schedule',
       exact: true,
@@ -146,10 +146,10 @@ export class HomePage extends AppShellPage {
       exact: true,
     });
     this.requestLeaveLink = this.myDay.getByRole('link', {
-      name: 'Request',
+      name: 'Request time off',
       exact: true,
     });
-    this.allTasksLink = this.myDay.getByRole('link', {
+    this.allTasksLink = this.main.getByRole('link', {
       name: 'All tasks',
       exact: true,
     });
@@ -180,32 +180,45 @@ export class HomePage extends AppShellPage {
     await this.open();
   }
 
+  /**
+   * The dashboard now renders all six KPIs inside one semantic definition
+   * list, so the value is the definition (`dd`) that follows the matching term
+   * (`dt`) rather than a card per KPI.
+   */
   kpiCard(label: string): Locator {
-    return this.main
-      .locator('[data-slot="card"]')
-      .filter({ has: this.page.getByText(label, { exact: true }) })
-      .first();
+    return this.businessNumbers
+      .locator('dt')
+      .filter({ hasText: new RegExp(`^${label}$`) })
+      .first()
+      .locator('xpath=ancestor::div[1]');
   }
 
   kpiValue(label: string): Locator {
-    return this.kpiCard(label).locator('p').first();
+    return this.businessNumbers
+      .locator('dt')
+      .filter({ hasText: new RegExp(`^${label}$`) })
+      .first()
+      .locator('xpath=following-sibling::dd[1]')
+      .locator('span')
+      .first();
   }
 
   setupLink(label: string): Locator {
     return this.setupCard.getByRole('link', { name: label, exact: true });
   }
 
+  dashboardShortcut(label: string): Locator {
+    return this.main.getByRole('link', { name: label, exact: true }).first();
+  }
+
   quickAccessLink(label: string): Locator {
-    return this.businessOverview.getByRole('link', {
-      name: label,
-      exact: true,
-    });
+    return this.dashboardShortcut(label);
   }
 
   async expectLoaded(): Promise<void> {
     await expect(this.greetingHeading).toBeVisible();
     await expect(this.greetingHeading).toHaveText(
-      /^Good (?:morning|afternoon|evening), .+!$/i,
+      /^Good (?:morning|afternoon|evening), .+$/i,
     );
     await expect(this.welcomeCopy).toBeVisible();
     await expect(this.businessOverviewHeading).toBeVisible();
@@ -252,10 +265,11 @@ export class HomePage extends AppShellPage {
     await expect(this.newTaskButton).toBeVisible();
   }
 
-  async expectDashboardSections(): Promise<void> {    await expect(this.taskStatusHeading).toBeVisible();
+  async expectDashboardSections(): Promise<void> {
+    await expect(this.taskStatusHeading).toBeVisible();
     await expect(this.completionImage).toBeVisible();
-    await expect(this.needsAttentionHeading).toBeVisible();
-    await expect(this.quickAccessLabel).toBeVisible();
+    await expect(this.needsAttentionSection).toBeVisible();
+    await expect(this.myTasksLabel).toBeVisible();
     await expect(this.latestAnnouncementsHeading).toBeVisible();
     await expect(this.whosOutHeading).toBeVisible();
     await expect(this.holidaysHeading).toBeVisible();
@@ -263,10 +277,10 @@ export class HomePage extends AppShellPage {
   }
 
   async expectQuickAccessLinks(): Promise<void> {
-    for (const [label, segment] of Object.entries(QUICK_ACCESS_LINKS)) {
-      const link = this.quickAccessLink(label);
+    for (const [label, segment] of Object.entries(DASHBOARD_SHORTCUTS)) {
+      const link = this.dashboardShortcut(label);
 
-      await expect(link, `Quick access link "${label}"`).toBeVisible();
+      await expect(link, `Dashboard shortcut "${label}"`).toBeVisible();
       await expect(link).toHaveAttribute('href', this.workspaceHref(segment));
     }
   }

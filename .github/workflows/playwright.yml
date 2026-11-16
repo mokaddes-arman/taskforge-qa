@@ -83,13 +83,24 @@ jobs:
             exit 1
           fi
 
-      - name: Run authentication tests
-        run: npm run test:auth:chrome
+      # One invocation so the HTML report, dashboard and bug report cover the
+      # auth and module projects together (the setup project runs as a
+      # dependency). Workers default to 2 on CI; override with the WORKERS
+      # repository variable.
+      - name: Run Playwright tests (auth + modules, Chrome)
+        run: npx playwright test --project=auth-chrome --project=modules-chrome
+        env:
+          WORKERS: ${{ vars.WORKERS }}
 
-      - name: Run module tests
-        run: npm run test:modules:chrome
+      - name: Publish bug report to job summary
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f dashboard-report/bug-report.md ]]; then
+            cat dashboard-report/bug-report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
 
-      - name: Upload Playwright report and traces
+      - name: Upload HTML report and traces
         if: always()
         uses: actions/upload-artifact@v7
         with:
@@ -97,5 +108,14 @@ jobs:
           path: |
             playwright-report/
             test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload dashboard and bug report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: dashboard-report
+          path: dashboard-report/
           if-no-files-found: ignore
           retention-days: 14

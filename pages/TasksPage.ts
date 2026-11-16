@@ -288,9 +288,34 @@ export class TasksPage extends AppShellPage {
     await this.openFilter(label);
 
     const target = this.filterDialog.getByRole('option', { name: option });
+    const before = await this.filterCount(label);
 
     await expect(target).toBeVisible();
     await target.click();
+
+    // WebKit under load can drop the first click on a freshly opened popover.
+    // Options toggle, so re-click only once, and only after giving the first
+    // click time to register.
+    const registered = await expect
+      .poll(() => this.filterCount(label), { timeout: 5_000 })
+      .not.toBe(before)
+      .then(
+        () => true,
+        () => false,
+      );
+
+    if (!registered) {
+      if (!(await this.filterDialog.isVisible())) {
+        await this.openFilter(label);
+      }
+      await target.click();
+      await expect
+        .poll(() => this.filterCount(label), {
+          message: `Filter "${label}" should register option ${String(option)}`,
+        })
+        .not.toBe(before);
+    }
+
     await this.closeFilter();
     await this.waitForSkeletonsToClear();
   }

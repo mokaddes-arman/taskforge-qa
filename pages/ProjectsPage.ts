@@ -1,8 +1,18 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 import { AppShellPage, type ShellPageOptions } from './AppShellPage';
 
-export class ProjectsPage extends AppShellPage {
-  readonly title: Locator;
+export const PROJECT_TABLE_COLUMNS = [
+  'Project',
+  'Due',
+  'Progress',
+  'Next milestone',
+  'Logged',
+  'Labor budget',
+  'Owner',
+  'Actions',
+] as const;
+
+export class ProjectsPage extends AppShellPage {  readonly title: Locator;
   readonly subtitle: Locator;
   readonly newProjectButton: Locator;
   readonly activeTab: Locator;
@@ -117,6 +127,61 @@ export class ProjectsPage extends AppShellPage {
       .getByRole('button', { name: 'Cancel', exact: true })
       .click();
     await expect(this.dialog).toBeHidden();
+  }
+
+  async tableColumns(): Promise<string[]> {
+    return (
+      await this.projectsTable
+        .locator('[role="columnheader"]')
+        .allInnerTexts()
+    ).map((column) => column.replace(/\s+/g, ' ').trim());
+  }
+
+  async expectTableColumns(): Promise<void> {
+    await expect
+      .poll(async () => this.tableColumns(), {
+        message: 'Projects table should render its column headers',
+      })
+      .toEqual([...PROJECT_TABLE_COLUMNS]);
+  }
+
+  /**
+   * Switches the list layout. A click that lands during the re-render of the
+   * previous layout can be dropped (seen in Firefox), so retry until the radio
+   * reports checked. Clicking an unchecked radio is idempotent.
+   */
+  async selectLayout(layout: 'Table' | 'Cards'): Promise<void> {
+    const radio = layout === 'Table' ? this.tableLayout : this.cardsLayout;
+
+    await expect(async () => {
+      if ((await radio.getAttribute('aria-checked')) !== 'true') {
+        await radio.click();
+      }
+      await expect(radio).toHaveAttribute('aria-checked', 'true', {
+        timeout: 3_000,
+      });
+    }).toPass({ timeout: 15_000 });
+  }
+
+  projectRow(name: string): Locator {
+    return this.projectsTable.getByRole('row').filter({ hasText: name });
+  }
+
+  async expectSingleProjectRow(name: string): Promise<void> {
+    await expect(
+      this.projectRow(name),
+      `Projects table row for "${name}"`,
+    ).toHaveCount(1);
+  }
+
+  async expectProjectRow(name: string): Promise<void> {
+    const row = this.projectRow(name);
+
+    await expect(row, `Projects table row for "${name}"`).toHaveCount(1);
+    await expect(row).toContainText(/\d+ of \d+ tasks done/);
+    await expect(row).toContainText(/Labor \$[\d,.]+ of \$[\d,.]+/);
+    await expect(row).toContainText(/\d+%/);
+    await expect(row).toContainText(/\d+(?:\.\d+)?\s*[hm](?:\s*\d+m)?/);
   }
 
   async expectNoBrokenValues(): Promise<void> {

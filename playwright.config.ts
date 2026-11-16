@@ -42,6 +42,13 @@ function moduleProject(
   };
 }
 
+function intFromEnv(name: string): number | undefined {
+  const raw = process.env[name]?.trim();
+  if (!raw) return undefined;
+  const value = Number(raw);
+  return Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
 /**
  * TaskForge QA configuration.
  *
@@ -49,25 +56,35 @@ function moduleProject(
  * Chrome, Firefox and WebKit. The setup project logs in once and writes the
  * shared storage state used by the module projects.
  *
- * Workers are intentionally pinned to 1 for the initial suite. The application
- * has a known sign-in consistency issue (QA-003) and a shared owner account, so
- * serial execution keeps diagnostics deterministic. Raise workers only after
- * dedicated test accounts/workspaces exist.
+ * Parallelism: module specs are read-only and share no state between tests, so
+ * every test runs in its own worker slot (`fullyParallel`). Only 00-auth stays
+ * sequential inside its file because each test submits the real sign-in form
+ * and the app rate-limits /sign-in/email (QA-003). Session redirects caused by
+ * the get-session limiter are recovered by AppShellPage.retryOnLoginRedirect.
+ *
+ * Defaults: 4 workers locally, 2 on CI. Override with WORKERS=<n> (WORKERS=1
+ * reproduces the old serial run for diagnostics) and RETRIES=<n>.
  */
 export default defineConfig({
   testDir: './tests',
   outputDir: 'test-results',
-  fullyParallel: false,
+  fullyParallel: true,
   forbidOnly: !!process.env.CI,
-  retries: 0,
-  workers: 1,
+  retries: intFromEnv('RETRIES') ?? (process.env.CI ? 1 : 0),
+  workers: intFromEnv('WORKERS') || (process.env.CI ? 2 : 4),
   timeout: 90_000,
   expect: {
     timeout: 15_000,
   },
   reporter: [
+    ['html', { outputFolder: 'playwright-report', open: 'never' }],
     ['list'],
-    ['html', { open: 'never', outputFolder: 'playwright-report' }],
+    // Inline failure annotations on GitHub pull requests.
+    ...(process.env.CI ? ([['github']] as const) : []),
+    [
+      './reporters/dashboard-reporter.js',
+      { outputFile: 'dashboard-report/index.html', projectName: 'TaskForge QA' },
+    ],
   ],
   use: {
     baseURL: env.baseURL,

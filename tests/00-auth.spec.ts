@@ -15,6 +15,11 @@ const LOGIN_RETRY_OPTIONS = { attempts: 3, retryDelayMs: 1_500 };
 // These tests type the real password; never record it in a trace.
 test.use({ trace: 'off' });
 
+// Each test submits the real sign-in form and /sign-in/email is rate-limited
+// (QA-003), so keep this file on one worker even when the suite runs fully
+// parallel. Other spec files still run alongside it.
+test.describe.configure({ mode: 'default' });
+
 function annotateFinding(description: string): void {
   test.info().annotations.push({
     type: 'qa-finding',

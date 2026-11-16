@@ -128,10 +128,8 @@ test.describe('Chat (Module 11)', () => {
       await expect(chatPage.conversationTitle).toHaveText(
         conversationHeading(conversation),
       );
-      expect(
-        await chatPage.conversationSummaryText(),
-        `${conversation.name} member summary`,
-      ).toMatch(/^\d+ members? · /);
+      await chatPage.expectConversationSummary(conversation);
+      await chatPage.expectConversationSummaryPrivacy(conversation);
       expect(
         await chatPage.composerPlaceholder(),
         `${conversation.name} composer placeholder`,

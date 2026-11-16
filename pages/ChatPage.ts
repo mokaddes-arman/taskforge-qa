@@ -32,7 +32,13 @@ export interface ChatEmojiPicker {
 }
 
 const MEMBER_SUMMARY_PATTERN = /^\d+ members? · /;
-const SHOW_MEMBERS_BUTTON = /^Show all \d+ members$/;
+const WORKSPACE_SUMMARY_PATTERN =
+  /^\d+ members? · One conversation for everyone in /;
+const DEPARTMENT_SUMMARY_PATTERN =
+  /^\d+ members? · Only this department \(and workspace Owners\/Admins\) can read it$/;
+const PROJECT_SUMMARY_PATTERN =
+  /^\d+ members? · Members of the project's department \(and workspace Owners\/Admins\) can read it$/;
+const SHOW_MEMBERS_BUTTON = /^Show all (?:members|\d+ members?)$/;
 const NEW_CHANNEL_NAME = /^New channel$/;
 const SEARCH_MESSAGES_NAME = /^Search messages$/;
 
@@ -66,6 +72,25 @@ export function conversationPlaceholder(
   }
 
   return `Message ${conversation.name.toLowerCase()}…`;
+}
+
+/** Header summary pattern for a conversation kind. */
+export function conversationSummaryPattern(
+  conversation: ChatConversation,
+): RegExp {
+  if (conversation.kind === 'Workspace') {
+    return WORKSPACE_SUMMARY_PATTERN;
+  }
+
+  if (conversation.kind === 'Department') {
+    return DEPARTMENT_SUMMARY_PATTERN;
+  }
+
+  if (conversation.kind === 'Project') {
+    return PROJECT_SUMMARY_PATTERN;
+  }
+
+  return MEMBER_SUMMARY_PATTERN;
 }
 
 /**
@@ -102,6 +127,7 @@ export class ChatPage extends AppShellPage {
       name: 'Chat',
       level: 2,
       exact: true,
+      includeHidden: true,
     });
     this.searchInput = this.main.getByRole('searchbox', {
       name: 'Search channels and direct messages',
@@ -116,9 +142,12 @@ export class ChatPage extends AppShellPage {
       name: 'Search this conversation',
       exact: true,
     });
-    this.showMembersButton = this.main.getByRole('button', {
-      name: SHOW_MEMBERS_BUTTON,
-    });
+    // The sidebar has its own "Show all members" button; the conversation
+    // header renders the member-count popover trigger with the same text
+    // prefix, so scope this locator to the header.
+    this.showMembersButton = this.main
+      .locator('header')
+      .getByRole('button', { name: SHOW_MEMBERS_BUTTON });
     this.emptyStateHint = this.main.getByText(CHAT_EMPTY_HINT, {
       exact: true,
     });
@@ -164,7 +193,17 @@ export class ChatPage extends AppShellPage {
     await this.gotoAuthenticated(this.workspaceHref('/chat'));
     await sidebarRequests;
     await this.waitForShell();
-    await expect(this.sidebarHeading).toBeVisible();
+
+    const compact = (this.page.viewportSize()?.width ?? 1440) < 768;
+
+    // The conversation rail collapses into a drawer below the md breakpoint, so
+    // its heading is attached but hidden until the drawer is opened.
+    if (compact) {
+      await expect(this.sidebarHeading).toBeAttached();
+    } else {
+      await expect(this.sidebarHeading).toBeVisible();
+    }
+
     await expect(this.conversationTitle).toBeVisible();
     await expect(this.conversationSummary).toBeVisible();
     await this.waitForConversationList();
@@ -268,11 +307,15 @@ export class ChatPage extends AppShellPage {
   }
 
   async openConversation(href: string): Promise<void> {
-    await this.conversationLink(href).click();
-    await expect(this.page).toHaveURL(new RegExp(`${escapeRegExp(href)}$`));
-    await expect(this.conversationTitle).toBeVisible();
-    await expect(this.conversationTitle).not.toHaveText('');
-    await expect(this.conversationSummary).toBeVisible();
+    // Client-side switches can bounce to /login when the get-session endpoint
+    // is rate-limited (heavier under parallel runs); recover once and retry.
+    await this.retryOnLoginRedirect(href, async () => {
+      await this.conversationLink(href).click();
+      await expect(this.page).toHaveURL(new RegExp(`${escapeRegExp(href)}$`));
+      await expect(this.conversationTitle).toBeVisible();
+      await expect(this.conversationTitle).not.toHaveText('');
+      await expect(this.conversationSummary).toBeVisible();
+    });
   }
 
   async expectActiveConversation(href: string): Promise<void> {
@@ -288,6 +331,33 @@ export class ChatPage extends AppShellPage {
 
   async conversationSummaryText(): Promise<string> {
     return normalize(await this.conversationSummary.innerText());
+  }
+
+  async expectConversationSummary(
+    conversation: ChatConversation,
+  ): Promise<void> {
+    await expect
+      .poll(async () => this.conversationSummaryText(), {
+        message: `${conversation.name} conversation summary`,
+      })
+      .toMatch(conversationSummaryPattern(conversation));
+  }
+
+  async expectConversationSummaryPrivacy(
+    conversation: ChatConversation,
+  ): Promise<void> {
+    if (conversation.kind === 'Department') {
+      await expect(this.conversationSummary).toContainText(
+        'Only this department (and workspace Owners/Admins) can read it',
+      );
+      return;
+    }
+
+    if (conversation.kind === 'Project') {
+      await expect(this.conversationSummary).toContainText(
+        "Members of the project's department (and workspace Owners/Admins) can read it",
+      );
+    }
   }
 
   async composerPlaceholder(): Promise<string> {
@@ -350,6 +420,15 @@ export class ChatPage extends AppShellPage {
 
   async clearMessage(): Promise<void> {
     await this.messageBox.fill('');
+
+    // WebKit leaves a ProseMirror contenteditable untouched on fill(''); clear
+    // it the way a user would (select all + delete).
+    if ((await this.composerText()) !== '') {
+      await this.messageBox.click();
+      await this.page.keyboard.press('ControlOrMeta+A');
+      await this.page.keyboard.press('Backspace');
+    }
+
     await expect
       .poll(async () => this.composerText(), {
         message: 'Composer should be empty after clearing the draft',
@@ -440,8 +519,14 @@ export class ChatPage extends AppShellPage {
           })
         : this.conversationSearchButton;
 
-    await button.click();
-    await expect(this.searchMessagesDialog).toBeVisible();
+    // Under load the first click can land before the trigger is hydrated
+    // (seen in Firefox); retry only while the dialog is still closed.
+    await expect(async () => {
+      if (!(await this.searchMessagesDialog.isVisible())) {
+        await button.click();
+      }
+      await expect(this.searchMessagesDialog).toBeVisible({ timeout: 3_000 });
+    }).toPass({ timeout: 15_000 });
   }
 
   async expectSearchMessagesDialog(): Promise<void> {

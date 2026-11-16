@@ -110,7 +110,22 @@ export class EmployeesPage extends AppShellPage {
   }
 
   async openEmployeeProfile(employeeName: string): Promise<void> {
-    await this.main.getByRole('link', { name: employeeName }).click();
+    const link = this.main.getByRole('link', { name: employeeName });
+    const href = await link.getAttribute('href');
+
+    if (!href) {
+      await link.click();
+      return;
+    }
+
+    // The deep page can bounce to /login when get-session is rate-limited;
+    // recover by reopening the profile URL directly.
+    await this.retryOnLoginRedirect(href, async () => {
+      if (this.currentPath() !== href) {
+        await link.click();
+      }
+      await expect(this.profileHeading).toBeVisible();
+    });
   }
 
   async expectProfileLoaded(): Promise<void> {

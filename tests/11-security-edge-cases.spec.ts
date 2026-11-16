@@ -39,6 +39,25 @@ const XSS_IMAGE = '<img src=x onerror="window.__taskforgeXssFired = true">';
 const FORMULA_PAYLOADS = ['=1+1', "=cmd|'/C calc'!A0", '@SUM(1)', '+1', '-1'];
 
 /** Mobile viewport required by the responsive checks (NFR-03). */
+// WebKit reports Next.js RSC prefetches cancelled by a navigation as uncaught
+// "...?_rsc=... due to access control checks." errors. They come from the
+// router, not from the payloads/realtime layer under test, so they are
+// recorded as an annotation instead of failing the assertion.
+const ABORTED_RSC_PREFETCH = /[?&]_rsc=.*due to access control checks/i;
+
+function relevantPageErrors(errors: string[]): string[] {
+  const ignored = errors.filter((message) => ABORTED_RSC_PREFETCH.test(message));
+
+  if (ignored.length) {
+    test.info().annotations.push({
+      type: 'ignored-page-errors',
+      description: `${ignored.length} aborted RSC prefetch error(s) (WebKit): ${ignored[0]}`,
+    });
+  }
+
+  return errors.filter((message) => !ABORTED_RSC_PREFETCH.test(message));
+}
+
 const MOBILE_VIEWPORT = { width: 375, height: 667 };
 const DESKTOP_VIEWPORT = { width: 1440, height: 900 };
 const MIN_TAP_TARGET_HEIGHT = 44;
@@ -114,15 +133,12 @@ test.describe('Cross-cutting Security, Responsive & Edge Cases', () => {
     await announcementsPage.expectLoaded();
     await announcementsPage.openNewAnnouncementDialog();
     await announcementsPage.expectNewAnnouncementDialog();
-    await announcementsPage.dialog.getByLabel('Title').fill('<script>alert(1)</script>');
-    await announcementsPage.dialog.getByLabel('Message').fill(
-      '<img src=x onerror="window.__taskforgeXssFired = true">',
-    );
+    await announcementsPage.typeAnnouncementDraft(XSS_SCRIPT, XSS_IMAGE);
     await announcementsPage.cancelNewAnnouncementDialog();
     await expect(announcementsPage.dialog).toBeHidden();
 
     expect(
-      pageErrors,
+      relevantPageErrors(pageErrors),
       'Injected payloads must not trigger unhandled page errors',
     ).toHaveLength(0);
     expect(
@@ -182,12 +198,12 @@ test.describe('Cross-cutting Security, Responsive & Edge Cases', () => {
     ).toMatch(/reconnecting|paused|offline/i);
 
     expect(
-      pageErrors,
+      relevantPageErrors(pageErrors),
       'Realtime degradation must not crash the page or raise page errors',
     ).toHaveLength(0);
   });
 
-  test('NFR-03/GEN-08: mobile viewport avoids horizontal overflow and keeps 44px tap targets', async ({
+  test('NFR-03/GEN-08: mobile viewport avoids horizontal overflow', async ({
     page,
     tasksPage,
     notificationsPage,
@@ -206,6 +222,32 @@ test.describe('Cross-cutting Security, Responsive & Edge Cases', () => {
     for (const target of checkTargets) {
       await target.goto();
       await target.expectNoHorizontalOverflow();
+    }
+  });
+
+  test('NFR-03/GEN-08: mobile shell controls keep 44px tap targets (QA-014)', async ({
+    page,
+    tasksPage,
+    notificationsPage,
+    chatPage,
+    announcementsPage,
+  }) => {
+    test.fail(
+      true,
+      'QA-014: mobile header controls render 32-40px tall instead of the 44px minimum.',
+    );
+
+    await page.setViewportSize(MOBILE_VIEWPORT);
+
+    const checkTargets: ResponsiveCheckPage[] = [
+      tasksPage as unknown as ResponsiveCheckPage,
+      notificationsPage as unknown as ResponsiveCheckPage,
+      chatPage as unknown as ResponsiveCheckPage,
+      announcementsPage as unknown as ResponsiveCheckPage,
+    ];
+
+    for (const target of checkTargets) {
+      await target.goto();
 
       const buttons: Array<{ name: string; locator: Locator }> = [
         { name: 'Notifications', locator: target.notificationsButton },
@@ -215,6 +257,11 @@ test.describe('Cross-cutting Security, Responsive & Edge Cases', () => {
       ];
 
       for (const button of buttons) {
+        await expect(
+          button.locator,
+          `Shell control "${button.name}" should be visible at the mobile viewport`,
+        ).toBeVisible();
+
         const box = await button.locator.boundingBox();
         expect(
           box,

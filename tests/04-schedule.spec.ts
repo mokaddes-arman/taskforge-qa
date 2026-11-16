@@ -29,6 +29,56 @@ test.describe('Schedule (Module 4)', () => {
     ).toBe(6 * 86_400_000);
   });
 
+  test('switches Day, Week and Month views and navigates each period', async ({
+    schedulePage,
+  }) => {
+    await schedulePage.goto();
+
+    const weekLabel = await schedulePage.weekLabelText();
+
+    await schedulePage.selectView('Day');
+    await schedulePage.expectDayView();
+
+    const todayLabel = await schedulePage.dayLabelText();
+
+    await schedulePage.nextDay();
+    expect(
+      await schedulePage.dayLabelText(),
+      'Next day should move forward exactly one day',
+    ).not.toBe(todayLabel);
+    await schedulePage.previousDay();
+    expect(
+      await schedulePage.dayLabelText(),
+      'Previous day should restore the starting day',
+    ).toBe(todayLabel);
+    await schedulePage.goToToday(todayLabel);
+
+    await schedulePage.selectView('Week');
+    expect(await schedulePage.weekLabelText()).toBe(weekLabel);
+    await schedulePage.expectWeekGrid();
+
+    await schedulePage.selectView('Month');
+    await schedulePage.expectMonthView();
+
+    const currentMonth = await schedulePage.monthLabelText();
+
+    await schedulePage.nextMonth();
+    expect(
+      await schedulePage.monthLabelText(),
+      'Next month should change the calendar month',
+    ).not.toBe(currentMonth);
+    await schedulePage.previousMonth();
+    expect(
+      await schedulePage.monthLabelText(),
+      'Previous month should restore the starting month',
+    ).toBe(currentMonth);
+    await schedulePage.goToThisMonth(currentMonth);
+
+    await schedulePage.selectView('Week');
+    await schedulePage.expectWeekGrid();
+    await schedulePage.expectNoBrokenValues();
+  });
+
   test('navigates by whole weeks and returns to the current week', async ({
     schedulePage,
   }) => {

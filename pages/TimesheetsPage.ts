@@ -339,14 +339,31 @@ export class TimesheetsPage extends AppShellPage {
   }
 
   summaryCard(label: string): Locator {
+    // The period totals moved from per-KPI cards into a single semantic
+    // definition list ("Period totals").
     return this.activePanel
-      .locator('[data-slot="card"]')
-      .filter({ has: this.page.getByText(label, { exact: true }) })
+      .getByRole('group', { name: 'Period totals' })
+      .or(
+        this.activePanel
+          .locator('[data-slot="card"]')
+          .filter({ has: this.page.getByText(label, { exact: true }) })
+          .first(),
+      )
       .first();
   }
 
   summaryValue(label: string): Locator {
-    return this.summaryCard(label).locator('p').last();
+    const totals = this.activePanel.getByRole('group', {
+      name: 'Period totals',
+    });
+
+    return totals
+      .locator('dt')
+      .filter({ hasText: new RegExp(`^${label}$`) })
+      .first()
+      .locator('xpath=following-sibling::dd[1]')
+      .locator('span')
+      .first();
   }
 
   async totalDuration(): Promise<string> {

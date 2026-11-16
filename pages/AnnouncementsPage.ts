@@ -117,6 +117,12 @@ export class AnnouncementsPage extends AppShellPage {
     await expect(this.dialog).toBeHidden();
   }
 
+  /** Types into the draft fields only; nothing is posted. */
+  async typeAnnouncementDraft(title: string, message: string): Promise<void> {
+    await this.dialog.getByLabel('Title').fill(title);
+    await this.dialog.getByLabel('Message').fill(message);
+  }
+
   async fillAnnouncement(title: string, message: string): Promise<void> {
     await this.dialog.getByLabel('Title').fill(title);
     await this.dialog.getByLabel('Message').fill(message);

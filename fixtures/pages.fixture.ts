@@ -10,6 +10,7 @@ import { LaborCostPage } from '../pages/LaborCostPage';
 import { LeavePage } from '../pages/LeavePage';
 import { PayrollPage } from '../pages/PayrollPage';
 import { ProjectsPage } from '../pages/ProjectsPage';
+import { ProjectDetailPage } from '../pages/ProjectDetailPage';
 import { SchedulePage } from '../pages/SchedulePage';
 import { SettingsPage } from '../pages/SettingsPage';
 import { TasksPage } from '../pages/TasksPage';
@@ -36,6 +37,7 @@ interface PageFixtures {
   announcementsPage: AnnouncementsPage;
   notificationsPage: NotificationsPage;
   projectsPage: ProjectsPage;
+  projectDetailPage: ProjectDetailPage;
 }
 
 /**
@@ -139,6 +141,13 @@ export const test = authTest.extend<PageFixtures>({
   projectsPage: async ({ page, context, authStoragePath }, use) => {
     await use(
       new ProjectsPage(page, {
+        restoreSession: () => restoreSessionCookies(context, authStoragePath),
+      }),
+    );
+  },
+  projectDetailPage: async ({ page, context, authStoragePath }, use) => {
+    await use(
+      new ProjectDetailPage(page, {
         restoreSession: () => restoreSessionCookies(context, authStoragePath),
       }),
     );

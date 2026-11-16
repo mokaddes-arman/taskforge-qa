@@ -4,7 +4,7 @@ import type { Browser, BrowserContext, Page } from '@playwright/test';
 import { LoginPage, INVALID_CREDENTIALS } from '../pages/LoginPage';
 import { WorkspacePage } from '../pages/WorkspacePage';
 import type { Credentials } from './env';
-import { env, STORAGE_STATE } from './env';
+import { AUTH_DIR, env, STORAGE_STATE } from './env';
 
 const SIGN_IN_ENDPOINT = '/api/v1/auth/sign-in/email';
 
@@ -13,9 +13,17 @@ const SIGN_IN_ENDPOINT = '/api/v1/auth/sign-in/email';
 // shared owner account, so pace login submissions instead of treating normal
 // UI coverage as an auth failure. A small safety margin covers the boundary.
 const LOGIN_WINDOW_MS = 10_000;
-const LOGIN_MAX_REQUESTS = 3;
+// Budget 2 of the server's 3 slots: with parallel workers the pacer runs at
+// its ceiling continuously, and the server window also counts submissions the
+// pacer cannot see (another run, a manual login).
+const LOGIN_MAX_REQUESTS = 2;
 const LOGIN_WINDOW_SAFETY_MS = 1_000;
-let loginRequestTimestamps: number[] = [];
+
+// Sign-in pacing is shared by every worker process: parallel workers (setup
+// and the three auth projects) must stay below the server limit together.
+const LOGIN_LEDGER = path.join(AUTH_DIR, 'signin-ledger.json');
+const LOGIN_LOCK = path.join(AUTH_DIR, 'signin-ledger.lock');
+const LOGIN_LOCK_STALE_MS = 15_000;
 
 export type LoginOutcome =
   | 'success'
@@ -55,25 +63,72 @@ export interface RateLimitRetryOptions {
   retryDelayMs?: number;
 }
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Cross-process mutex: mkdir is atomic on every OS. */
+async function withLoginLock<T>(action: () => T): Promise<T> {
+  fs.mkdirSync(AUTH_DIR, { recursive: true });
+
+  for (;;) {
+    try {
+      fs.mkdirSync(LOGIN_LOCK);
+      break;
+    } catch {
+      try {
+        // A worker that crashed while holding the lock must not block the run.
+        if (Date.now() - fs.statSync(LOGIN_LOCK).mtimeMs > LOGIN_LOCK_STALE_MS) {
+          fs.rmSync(LOGIN_LOCK, { recursive: true, force: true });
+          continue;
+        }
+      } catch {
+        continue;
+      }
+      await sleep(100);
+    }
+  }
+
+  try {
+    return action();
+  } finally {
+    fs.rmSync(LOGIN_LOCK, { recursive: true, force: true });
+  }
+}
+
+function readLedger(): number[] {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(LOGIN_LEDGER, 'utf8'));
+    return Array.isArray(parsed) ? parsed.filter((n) => typeof n === 'number') : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Waits until a sign-in submission fits inside Better Auth's window
+ * (LOGIN_MAX_REQUESTS per LOGIN_WINDOW_MS) across all worker processes, then
+ * records the reservation.
+ */
 async function waitForLoginSlot(): Promise<void> {
   for (;;) {
-    const now = Date.now();
-    loginRequestTimestamps = loginRequestTimestamps.filter(
-      (timestamp) => now - timestamp < LOGIN_WINDOW_MS,
-    );
+    const waitMs = await withLoginLock(() => {
+      const now = Date.now();
+      const recent = readLedger().filter(
+        (timestamp) => now - timestamp < LOGIN_WINDOW_MS,
+      );
 
-    if (loginRequestTimestamps.length < LOGIN_MAX_REQUESTS) {
-      loginRequestTimestamps.push(now);
+      if (recent.length < LOGIN_MAX_REQUESTS) {
+        fs.writeFileSync(LOGIN_LEDGER, JSON.stringify([...recent, now]));
+        return 0;
+      }
+
+      return LOGIN_WINDOW_MS - (now - recent[0]) + LOGIN_WINDOW_SAFETY_MS;
+    });
+
+    if (waitMs === 0) {
       return;
     }
 
-    const oldest = loginRequestTimestamps[0];
-    const remainingMs =
-      LOGIN_WINDOW_MS - (now - oldest) + LOGIN_WINDOW_SAFETY_MS;
-
-    await new Promise((resolve) =>
-      setTimeout(resolve, Math.max(remainingMs, 250)),
-    );
+    await sleep(Math.max(waitMs, 250));
   }
 }
 
@@ -352,9 +407,9 @@ export async function loginWithRetry(
       let backoffMs = retryDelayMs * current;
 
       if (lastAttempt?.outcome === 'rate_limited') {
-        // The server's window may include requests from an earlier run, so
-        // wait a full window and let the local pacer start clean.
-        loginRequestTimestamps = [];
+        // The server's window may include requests from an earlier run or
+        // another tool, so back off for at least a full window. The shared
+        // ledger is left intact because other workers rely on it.
         backoffMs = Math.max(
           lastAttempt.retryAfterMs ?? 0,
           LOGIN_WINDOW_MS + LOGIN_WINDOW_SAFETY_MS,

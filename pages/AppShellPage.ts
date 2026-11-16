@@ -20,27 +20,35 @@ export interface ShellPageOptions {
   restoreSession?: () => Promise<void>;
 }
 
-/** Workspace destinations in the order rendered by the sidebar. */
+/**
+ * Workspace destinations in the order rendered by the sidebar.
+ *
+ * The 16 Nov 2026 release regrouped the sidebar into Work / Team time / People /
+ * Costs sections and moved Notifications, Employees and Departments into the
+ * workspace tree. The project link below the Projects entry is data-driven and
+ * is checked separately in `expectSidebarNavigation`.
+ */
 export const WORKSPACE_NAV: readonly NavItem[] = [
   { label: 'Home', segment: '' },
   { label: 'Tasks', segment: '/tasks' },
+  { label: 'Notifications', segment: '/notifications' },
+  { label: 'Projects', segment: '/projects' },
   { label: 'Calendar', segment: '/calendar' },
   { label: 'Schedule', segment: '/schedule' },
   { label: 'Time clock', segment: '/time-clock' },
   { label: 'Timesheets', segment: '/timesheets' },
   { label: 'Leave', segment: '/leave' },
-  { label: 'Labor cost', segment: '/reports/labor-cost' },
-  { label: 'Payroll', segment: '/reports/payroll' },
   { label: 'Working now', segment: '/working-now' },
+  { label: 'Employees', segment: '/employees' },
+  { label: 'Departments', segment: '/departments' },
   { label: 'Chat', segment: '/chat' },
   { label: 'Announcements', segment: '/announcements' },
-  { label: 'Notifications', segment: '/notifications' },
-  { label: 'Projects', segment: '/projects' },
+  { label: 'Labor cost', segment: '/reports/labor-cost' },
+  { label: 'Payroll', segment: '/reports/payroll' },
 ] as const;
 
+/** The workspaces-settings footer navigation now only contains Settings. */
 export const SETTINGS_NAV: readonly NavItem[] = [
-  { label: 'Departments', segment: '/departments' },
-  { label: 'Employees', segment: '/employees' },
   { label: 'Settings', segment: '/settings' },
 ] as const;
 
@@ -73,6 +81,7 @@ export class AppShellPage extends BasePage {
     });
     this.searchButton = page
       .getByRole('button', { name: 'Search', exact: true })
+      .filter({ visible: true })
       .first();
     this.createButton = page.getByRole('button', {
       name: 'Create',
@@ -230,6 +239,22 @@ export class AppShellPage extends BasePage {
         this.workspaceHref(item.segment),
       );
     }
+
+    for (const section of ['Work', 'Team time', 'People', 'Costs']) {
+      await expect(
+        this.workspaceNav.getByText(section, { exact: true }),
+        `Sidebar section "${section}"`,
+      ).toBeVisible();
+    }
+
+    // The active project shortcut is data-driven; assert the pattern instead
+    // of a project name so the shell check survives data changes.
+    await expect(
+      this.workspaceNav
+        .locator('a[href*="/projects/"][href$="/board"]')
+        .first(),
+      'Sidebar project shortcut',
+    ).toBeVisible();
   }
 
   /**
@@ -239,6 +264,7 @@ export class AppShellPage extends BasePage {
   async readRealtimeStatus(): Promise<string> {
     const status = this.page.getByRole('status');
     const count = await status.count();
+    const texts: string[] = [];
 
     for (let index = 0; index < count; index += 1) {
       const text =
@@ -249,20 +275,32 @@ export class AppShellPage extends BasePage {
       const clean = text.replace(/\s+/g, ' ').trim();
 
       if (clean) {
-        return clean;
+        texts.push(clean);
       }
     }
 
-    return '';
+    return (
+      texts.find((text) =>
+        /reconnecting|live updates|paused|offline|connected/i.test(text),
+      ) ??
+      texts[0] ??
+      ''
+    );
   }
 
   async expectRealtimeStatusReported(): Promise<string> {
-    const status = await this.readRealtimeStatus();
+    let status = '';
 
-    expect(
-      status === '' || /reconnecting|live|connected|paused/i.test(status),
-      `Unexpected realtime status copy: "${status}"`,
-    ).toBe(true);
+    await expect
+      .poll(async () => {
+        status = await this.readRealtimeStatus();
+        return status;
+      }, {
+        message:
+          'Realtime status should report the paused/reconnecting transport',
+        timeout: 20_000,
+      })
+      .toMatch(/reconnecting|live updates|paused|offline|connected/i);
 
     return status;
   }
