@@ -94,8 +94,10 @@ export function buildBugReport(payload) {
     const first = runs[0];
     const module = moduleName(first);
 
-    const broken = runs.filter((t) => t.status === 'failed' || t.status === 'flaky');
     const known = runs.filter((t) => t.knownDefect);
+    // A test can be a known defect in some projects only (e.g. test.fail unless
+    // Firefox); a failure in a project without the annotation is a real bug.
+    const broken = runs.filter((t) => !t.knownDefect && (t.status === 'failed' || t.status === 'flaky'));
     const skipped = runs.filter((t) => t.status === 'skipped');
 
     if (known.length) {
@@ -116,10 +118,9 @@ export function buildBugReport(payload) {
           : 'Defect still reproduces',
       });
       // A known defect whose expectation flipped is a verification task, not a new bug.
-      continue;
     }
 
-    if (skipped.length && !broken.length) {
+    if (!known.length && skipped.length && !broken.length) {
       const reason =
         skipped.flatMap((t) => t.annotations).find((a) => a.type === 'skip')?.description || 'Skipped';
       notVerified.push({
@@ -216,10 +217,13 @@ export function bugReportMarkdown(payload) {
   out.push('| --- | --- |');
   out.push(`| Application | ${cell(e.baseURL || 'n/a')} |`);
   out.push(`| Browsers / projects | ${cell(e.projects.join(', '))} |`);
+  if (payload.partialRun) {
+    out.push(`| Scope | PARTIAL RUN: ${payload.projectsRun} of ${payload.configuredProjects.length} configured projects; counts cover only what ran |`);
+  }
   out.push(`| Suite revision | ${cell([e.branch, e.commit].filter(Boolean).join(' @ ') || 'n/a')} |`);
   out.push(`| Runner | ${cell(`${e.runner} · ${e.os} · Node ${e.node} · Playwright ${e.playwright} · ${e.workers} worker(s)`)} |`);
   out.push(
-    `| Result | ${t.total} tests: ${t.passed} passed, ${t.failed} failed, ${t.flaky} flaky, ${t.skipped} skipped |`
+    `| Result | ${t.total} tests: ${t.passed} passed (incl. ${t.knownDefects ?? 0} known-defect expected failures), ${t.failed} failed, ${t.flaky} flaky, ${t.skipped} skipped |`
   );
   out.push('');
 

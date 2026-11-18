@@ -34,6 +34,7 @@ for (const dir of ['dashboard-report', 'playwright-report']) {
 }
 
 console.log(
-  `Archived ${totals.total} tests (${totals.passed} passed, ${totals.failed} failed, ` +
-    `${totals.skipped} skipped) -> ${path.relative(root, target)}`,
+  `Archived ${totals.total} tests (${totals.passed} passed` +
+    (totals.knownDefects ? ` incl. ${totals.knownDefects} known-defect expected failures` : '') +
+    `, ${totals.failed} failed, ${totals.skipped} skipped) -> ${path.relative(root, target)}`,
 );

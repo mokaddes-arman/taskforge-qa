@@ -11,7 +11,7 @@
     "setup": "npm install",
     "test": "playwright test",
     "typecheck": "tsc --noEmit",
-    "test:unit": "node --test reporters/redact.test.js",
+    "test:unit": "node --test reporters/redact.test.js reporters/bug-report.test.js",
     "test:auth": "playwright test tests/00-auth.spec.ts",
     "test:auth:chrome": "playwright test tests/00-auth.spec.ts --project=auth-chrome",
     "test:auth:firefox": "playwright test tests/00-auth.spec.ts --project=auth-firefox",

@@ -154,14 +154,36 @@ TaskForge branding and the bug report.
 - **Not verified.** Tests skipped because live data did not meet the
   precondition, with the reason.
 
+**Counts.** The *Bug report* badge counts new bugs **plus** known defects, so
+a green run never shows 0 while confirmed defects still reproduce. Expected
+failures count as *passed* (Playwright semantics); the *Passed* card and the
+bug report's Result row state how many of them are known-defect expected
+failures. A test that is a known defect in some browsers only (for example
+`test.fail` unless Firefox) is still reported as a new bug when it fails in a
+browser without the annotation.
+
+**Partial runs.** The reports always describe the latest run. When fewer test
+projects ran than are configured (a single spec, one browser), the dashboard
+and `bug-report.md` say **Partial run: N of M test projects**, because defects
+in specs that did not run are not listed.
+
 `dashboard-report/history.json` keeps the last 20 runs for the pass-rate trend.
 
-Each run overwrites `playwright-report/` and `dashboard-report/`. To keep a
-run for later comparison, snapshot it before the next run:
+**Every run is archived.** `playwright-report/` and `dashboard-report/` are
+rebuilt by each run. After writing them, the dashboard reporter copies both to
+`qa/report-history/<run time>_auto-<full|projects>/` (local runs only; never
+overwrites; the HTML report is copied only if this run produced it). Set
+`QA_ARCHIVE=never` to skip that. A milestone run can also be archived with a
+label:
 
 ```sh
 npm run report:archive -- <label>   # -> qa/report-history/<run date>_<label>/
 ```
+
+**Do not pass `--reporter` on its own.** On the command line it *replaces* the
+configured reporters, so the dashboard, bug report and HTML report are not
+updated (the config prints a warning). Omit it, or keep all three:
+`--reporter=list,html,./reporters/dashboard-reporter.js`.
 
 **Credential masking (QA-018).** Playwright titles input steps with their value
 (`Fill "<value>"`). The real password is therefore typed with

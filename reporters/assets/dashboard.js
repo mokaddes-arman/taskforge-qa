@@ -117,7 +117,8 @@
     { id: 'overview', label: 'Overview' },
     { id: 'tests', label: 'Tests', count: () => data.tests.length },
     { id: 'failures', label: 'Failures', count: () => attention.length },
-    { id: 'bugs', label: 'Bug report', count: () => bugReport.bugs.length },
+    // New bugs + confirmed known defects: a green run can still carry defects.
+    { id: 'bugs', label: 'Bug report', count: () => bugReport.bugs.length + bugReport.knownDefects.length },
     { id: 'breakdown', label: 'Breakdown' },
     { id: 'slowest', label: 'Slowest' },
     { id: 'api', label: 'API', count: () => apiTests.length },
@@ -261,10 +262,14 @@
 
   function environmentCard() {
     const projects = (data.projects || []).filter((p) => p !== 'setup');
+    const scope = data.partialRun
+      ? `<div class="card-sub v-flaky"><b>Partial run:</b> ${f(data.projectsRun)} of ${f((data.configuredProjects || []).length)} test projects ran. Counts and the bug report cover only this run; earlier runs are archived in qa/report-history.</div>`
+      : '';
     return `<div class="card col-span-2">
       <span class="card-label">Environment</span>
       <div class="big-num v-total" style="font-size:32px">${esc(data.env || 'local')}</div>
       <div class="card-sub">${projects.length ? projects.map(esc).join(' · ') : 'no browser projects'}</div>
+      ${scope}
     </div>`;
   }
 
@@ -317,7 +322,7 @@
         ${ringCard()}
         ${trendCard()}
         ${durationCard()}
-        ${statCard('Passed', f(t.passed), 'first time', 'v-pass')}
+        ${statCard('Passed', f(t.passed), f(t.knownDefects) ? `incl. ${f(t.knownDefects)} known-defect expected failures` : 'first time', 'v-pass')}
         ${statCard('Failed', f(t.failed), t.failed ? 'needs attention' : 'none', 'v-fail')}
         ${statCard('Flaky', f(t.flaky), 'passed on retry', 'v-flaky')}
         ${statCard('Skipped', f(t.skipped), 'not executed', 'v-skip')}
@@ -467,6 +472,7 @@
         </div>
       </div>
       <div class="card-sub" style="margin-top:8px">${esc(e.baseURL || '')} · ${esc((e.projects || []).join(' · '))}${e.commit ? ' · ' + esc([e.branch, e.commit].filter(Boolean).join(' @ ')) : ''} · Playwright ${esc(e.playwright || '')}</div>
+      ${data.partialRun ? `<div class="card-sub v-flaky" style="margin-top:6px"><b>Partial run</b> (${f(data.projectsRun)} of ${f((data.configuredProjects || []).length)} test projects): defects in specs that did not run are not listed here.</div>` : ''}
       <div class="bug-stats">
         <span><b class="v-fail">${r.bugs.length}</b> new bug${r.bugs.length === 1 ? '' : 's'}</span>
         <span><b class="v-flaky">${r.knownDefects.length}</b> known defect${r.knownDefects.length === 1 ? '' : 's'}</span>

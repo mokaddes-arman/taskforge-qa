@@ -44,6 +44,20 @@ function moduleProject(
   };
 }
 
+// `--reporter` on the command line REPLACES the reporters below, so the
+// dashboard, bug report and HTML report would silently not be updated. Warn
+// once (main process only) and show the form that keeps them.
+if (
+  !process.env.TEST_WORKER_INDEX &&
+  process.argv.some((arg) => arg === '--reporter' || arg.startsWith('--reporter=')) &&
+  !process.argv.some((arg) => arg.includes('dashboard-reporter'))
+) {
+  console.warn(
+    '\n[TaskForge QA] --reporter replaces the configured reporters: the dashboard, bug report and HTML report will NOT be updated.' +
+      '\n  Omit --reporter, or use: --reporter=list,html,./reporters/dashboard-reporter.js\n',
+  );
+}
+
 function intFromEnv(name: string): number | undefined {
   const raw = process.env[name]?.trim();
   if (!raw) return undefined;
