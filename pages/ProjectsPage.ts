@@ -184,6 +184,12 @@ export class ProjectsPage extends AppShellPage {  readonly title: Locator;
     await expect(row).toContainText(/\d+(?:\.\d+)?\s*[hm](?:\s*\d+m)?/);
   }
 
+  /** INT-01: number of project rows in the Projects table (header excluded). */
+  async projectCount(): Promise<number> {
+    await expect(this.projectsTable).toBeVisible();
+    return (await this.projectsTable.getByRole('row').count()) - 1;
+  }
+
   async expectNoBrokenValues(): Promise<void> {
     await expect(this.main).not.toContainText(/NaN|undefined|Invalid Date/);
   }

@@ -156,6 +156,20 @@ TaskForge branding and the bug report.
 
 `dashboard-report/history.json` keeps the last 20 runs for the pass-rate trend.
 
+Each run overwrites `playwright-report/` and `dashboard-report/`. To keep a
+run for later comparison, snapshot it before the next run:
+
+```sh
+npm run report:archive -- <label>   # -> qa/report-history/<run date>_<label>/
+```
+
+**Credential masking (QA-018).** Playwright titles input steps with their value
+(`Fill "<value>"`). The real password is therefore typed with
+`LoginPage.fillSecretPassword` (recorded only as `Evaluate`), and the dashboard
+reporter masks every `*password*` / `*secret*` / `*token*` / `*api_key*`
+environment value in `index.html`, `bug-report.md` and `bug-report.json`.
+`npm run test:unit` runs the masking unit tests.
+
 ## Continuous integration
 
 `.github/workflows/playwright.yml` runs on pushes and pull requests to `main`
@@ -202,6 +216,16 @@ sign in with the shared owner account at the same time.
 9. Logout clears the session and protects workspace routes.
 10. Clearing session cookies redirects protected routes to login.
 11. QA-003 regression guard: repeated fresh-context sign-ins are consistent.
+
+`Authentication hardening` (added 17 Nov 2026; dummy credentials, sign-up /
+password-reset / validation-only sign-in APIs blocked in the browser)
+
+12. AUTH-12: forgot-password validates empty/invalid email without sending a reset.
+13. AUTH-13: sign-up renders and rejects a weak, mismatched password without calling the API.
+14. AUTH-14: a whitespace-only email is rejected before the sign-in API.
+15. AUTH-14 (QA-029, `test.fail`): over-long email / whitespace-only password reach the API.
+16. SEC-16 (QA-012, `test.fail`): with scripts blocked the form submits a GET with the credentials in the URL.
+17. SEC-08/AUTH-15: a foreign `callbackURL`/`redirect`/`next` is ignored after login, and a logged-out session token cannot be replayed.
 
 Animations/loading are handled with visibility and response/URL assertions, not
 fixed sleeps. This file runs its tests in order on one worker (sign-in rate
@@ -439,6 +463,55 @@ module boundaries instead of belonging to a single module:
 The spec never submits or mutates data: dialogs are cancelled, searches are
 cleared and exports are inspected only.
 
+### Coverage-audit specs (17 Nov 2026)
+
+| Spec | Scenarios | Notes |
+|---|---|---|
+| `tests/11-security-api.spec.ts` | SEC-02/04/08/09/10/11/12/13/14/17, GEN-07 | Headers, clickjacking, CORS, version banners, anonymous API access (endpoints discovered from the app's own calls), session payload, cookie flags, non-member workspace, error pages, QA-002 description scan. GET/OPTIONS only. |
+| `tests/18-global-shell.spec.ts` | GEN-02/03/04/05 | Clicks every sidebar link, Ctrl+K search (QA-023), workspace switcher, theme (restored afterwards). |
+| `tests/18-api-integration.spec.ts` | API-01…07, INT-09/12 | REST contract of 38 read endpoints, server-side validation (422) and 404 handling, API ↔ UI consistency (KPIs, directory, projects, plan, working now, tasks, departments, leave, timesheets), QA-006 rule server-side, workspace time zone and server clock, realtime host reachability (QA-001), analytics outage isolation. GET only (`utils/api.ts`). |
+| `tests/18-integration-consistency.spec.ts` | INT-01/02/03/05/07/08, E-08 | Home KPIs vs modules, plan usage vs directory, hours across modules, every data API 2xx JSON, CSV exports parsed in memory. |
+| `tests/19-accessibility.spec.ts` | A11Y-01/02/03/05 | axe-core WCAG 2.1 A/AA on login + 17 modules (axe JSON attached), keyboard order and focus visibility, dialog focus trap/restore (QA-028), titles/lang/landmarks. Known axe defects QA-024/025/026 are `test.fail`. |
+| `tests/19-performance.spec.ts` | NFR-01, PERF-02, PERF-05 | Single-user timings with budgets; **skipped in parallel runs**, run with `npm run test:perf` (1 worker). Not a load test. |
+| `tests/19-resilience.spec.ts` | NFR-08, PERF-06 | Simulated API 500 (friendly error + Try again), offline navigation (QA-027), recovery, slow API. Nothing reaches the server. |
+| `tests/19-compatibility.spec.ts` | COMP-07 / NFR-03 | 320, 768, 1024, 1920 px overflow checks. |
+| `tests/compat/compat-smoke.spec.ts` | COMP-04/05/06 | `npm run test:compat` (`playwright.compat.config.ts`): Edge, Pixel 7, Galaxy S9+ (320 px), iPhone 15, iPad Pro 11. Not part of `npm test`. |
+| `reporters/redact.test.js` | UNIT-08 / REG-07 | `npm run test:unit` (Node test runner). |
+| `tests/20-rbac.spec.ts` | RBAC-01…10, PERM-02/03/04, E-03/E-10, ST-10, SEC-02/03 | Admin / Manager / Employee: sidebar, Create menu, payroll & labor cost, Working now, settings, module actions, pay-rate protection, API write refusals (no-op probes), cross-tenant isolation, QA-030. Project `roles-chrome`. |
+| `tests/20-platform-admin.spec.ts` | PA-01…05 | Platform admin console (`/admin`): dashboard/users/plans vs API, console closed to workspace roles, no implicit workspace access, row actions, impersonation banner and stop. |
+
+Scenario catalogue, coverage matrix and the Excel/Markdown QA reports are built
+from real run archives by `qa/tools/build_qa_reports.py` (see `qa/README.md`).
+
+### Role-based access (RBAC) suite
+
+`roles.setup.ts` (project `setup-roles`) signs in the platform admin
+(`super_admin` / `super_admin_password` in `.env`), reusing
+`playwright/.auth/super-admin.json` while it is still valid, then uses the
+platform's **Impersonate** feature to write one session per role:
+`playwright/.auth/role-{admin,manager,employee}.json`. The server treats these
+sessions as the impersonated user (`session.impersonatedBy` is set), so
+authorization is enforced exactly as for a normal sign-in.
+
+| Role | Account (`.env`) | Origin |
+|---|---|---|
+| Admin | `qa_admin_email` | Created 17 Nov 2026 by `scripts/provision-role-accounts.cjs` |
+| Manager | `qa_manager_email` | Created 17 Nov 2026 by `scripts/provision-role-accounts.cjs` |
+| Employee | `qa_employee_email` | Existing test member (the Free plan allows 5 members; the workspace is now 5/5) |
+
+The Admin/Manager accounts were created through the normal sign-up and still
+await e-mail verification; their passwords (`qa_*_password`) only work after
+the verification links are clicked. Impersonation does not need them.
+
+Write probes in `20-rbac` are no-ops even if wrongly accepted (same role, same
+settings, empty patch, inviting an existing member). Admin writes are not
+exercised. `fixtures/roles.fixture.ts` selects the session with
+`test.use({ role: 'admin' | 'manager' | 'employee' | 'platform' })`.
+
+```sh
+npx playwright test --project=roles-chrome   # runs setup, setup-roles, then 20-*
+```
+
 ## Known constraints handled by the helpers
 
 - **Rate limiting:** Better Auth limits `/sign-in/email`; TaskForge returns
@@ -455,7 +528,7 @@ cleared and exports are inspected only.
   `ERR_NAME_NOT_RESOLVED` / `ERR_NETWORK_CHANGED` navigations.
 - **Realtime host:** `api.mytaskforge.net` does not resolve (QA-001), so tests
   must assert persisted HTTP state and must not depend on live updates.
-- **Free plan limits:** members `3/5`, projects `1/1`, workspaces `1/1`
+- **Free plan limits:** members `5/5` (since the RBAC accounts were added), projects `1/1`, workspaces `1/1`
   (QA-005, 16 Nov 2026). Creation tests need a staging workspace or explicit
   approval/data cleanup.
 
@@ -484,5 +557,8 @@ than logging in or querying the DOM inside each spec.
   `playwright-report/`, `dashboard-report/` or `qa/` evidence. All are
   gitignored.
 - The failure-context attachment masks credential-like query values
-  (`password`, `token`, `email`, …), and `00-auth` / `setup` keep traces off,
-  so bug reports never include the password.
+  (`password`, `token`, `email`, …), and `00-auth` / `setup` keep traces off.
+  Before 17 Nov 2026 the bug report and the Playwright HTML report still
+  contained the password through `Fill "<value>"` step titles (QA-018); the
+  real password is now typed without a value-bearing step and the dashboard
+  reporter masks secret values in everything it writes.

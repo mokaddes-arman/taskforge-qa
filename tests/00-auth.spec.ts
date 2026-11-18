@@ -1,5 +1,6 @@
 import { test, expect } from '../fixtures/auth.fixture';
 import {
+  attemptLogin,
   formatLoginDiagnostics,
   loginWithRateLimitRetry,
   loginWithRetry,
@@ -9,6 +10,7 @@ import {
 import { env } from '../utils/env';
 import { LoginPage } from '../pages/LoginPage';
 import { WorkspacePage } from '../pages/WorkspacePage';
+import { ForgotPasswordPage, SignupPage } from '../pages/AuthFormsPage';
 
 const LOGIN_RETRY_OPTIONS = { attempts: 3, retryDelayMs: 1_500 };
 
@@ -349,6 +351,127 @@ test.describe('Authentication', () => {
     for (const attempt of finalAttempts) {
       expect(attempt.status).toBe(200);
       expect(attempt.credentialUrlLeak).toBe(false);
+    }
+  });
+});
+
+/**
+ * Authentication hardening added by the 17 Nov 2026 coverage audit.
+ * Dummy credentials are used wherever no real sign-in is needed; the sign-up
+ * and password-reset APIs are blocked at the network layer so no user is
+ * created and no email is sent even if client-side validation breaks.
+ */
+test.describe('Authentication hardening', () => {
+  const DUMMY_EMAIL = 'qa.dummy@example.com';
+  const DUMMY_PASSWORD = 'Dummy-Not-A-Real-Pw1!';
+
+  test('AUTH-12: forgot-password page validates an empty email without sending a reset', async ({ page }) => {
+    const forgotPage = new ForgotPasswordPage(page);
+    const resetAttempts = await forgotPage.gotoGuarded();
+    await forgotPage.expectRendered();
+
+    await forgotPage.submitEmail('');
+    await forgotPage.expectEmailError();
+    await forgotPage.submitEmail('not-an-email');
+    await forgotPage.expectEmailError();
+
+    expect(resetAttempts, 'Invalid input must not call the password-reset API').toEqual([]);
+  });
+
+  test('AUTH-13: sign-up page renders its form without submitting', async ({ page }) => {
+    const signupPage = new SignupPage(page);
+    const signUpAttempts = await signupPage.gotoGuarded();
+    await signupPage.expectRendered();
+
+    // Boundary: 5-character password without a digit, and a mismatched confirmation.
+    await signupPage.fillForm({ name: 'QA Boundary', email: DUMMY_EMAIL, password: 'abcd!', confirm: 'abcd?' });
+    await signupPage.submit();
+    const messages = await signupPage.validationMessages();
+
+    expect(messages.join(' | '), 'Weak/mismatched passwords are rejected inline').toMatch(/password|match|characters/i);
+    expect(signUpAttempts, 'Invalid input must not call the sign-up API').toEqual([]);
+  });
+
+  test('AUTH-14: whitespace-only email is rejected before the sign-in API', async ({ page, loginPage }) => {
+    const attempts = await loginPage.blockSignInApi();
+    await loginPage.goto({ waitForHydration: true });
+
+    await loginPage.fillEmail('   ');
+    await loginPage.fillPassword('   ');
+    await loginPage.submit();
+    await expect(loginPage.emailInput).toHaveAttribute('aria-invalid', 'true');
+    await expect(loginPage.errorAlert(/enter your email/i)).toBeVisible();
+
+    expect(attempts, 'No sign-in request for a blank email').toEqual([]);
+    await expect(page).toHaveURL(/\/login$/);
+  });
+
+  test('AUTH-14 (QA-029): over-long email and whitespace-only password are rejected before the sign-in API', async ({ page, loginPage }) => {
+    test.fail(true, 'QA-029: a 300-character email (RFC 5321 max 254) and a whitespace-only password pass client validation and are sent to the sign-in API.');
+    const attempts = await loginPage.blockSignInApi();
+    await loginPage.goto({ waitForHydration: true });
+
+    await loginPage.fillEmail(`${'a'.repeat(290)}@example.com`);
+    await loginPage.fillPassword(DUMMY_PASSWORD);
+    await loginPage.submit();
+    await page.waitForTimeout(1_500);
+
+    await loginPage.goto({ waitForHydration: true });
+    await loginPage.fillEmail(DUMMY_EMAIL);
+    await loginPage.fillPassword('   ');
+    await loginPage.submit();
+    await page.waitForTimeout(1_500);
+
+    expect(attempts, 'Invalid credentials must be stopped client-side').toEqual([]);
+  });
+
+  test('SEC-16 (QA-012): login form without scripts must not put credentials in the URL', async ({ loginPage }) => {
+    test.fail(true, 'QA-012: the server-rendered <form> has no method, so a pre-hydration/no-JS submit is a GET with the credentials in the query string.');
+
+    await loginPage.gotoWithoutScripts();
+    await loginPage.fillEmail(DUMMY_EMAIL);
+    await loginPage.fillPassword(DUMMY_PASSWORD);
+    await loginPage.submitAndWaitForNavigation();
+
+    await loginPage.expectNoCredentialQuery();
+  });
+
+  test('SEC-08/AUTH-15: post-login redirect stays on-origin and a logged-out token cannot be replayed', async ({
+    browser,
+    page,
+    context,
+    credentials,
+    loginPage,
+    workspacePage,
+  }) => {
+    test.slow();
+    const origin = new URL(env.baseURL).origin;
+    const evil = encodeURIComponent('https://evil.example/phish');
+
+    await loginPage.gotoWithQuery(`callbackURL=${evil}&redirect=${evil}&redirectTo=${evil}&next=${evil}`);
+    const attempt = await attemptLogin(page, credentials, 1);
+    expect(attempt.outcome, `Sign-in outcome: ${JSON.stringify({ ...attempt, url: undefined })}`).toBe('success');
+    await workspacePage.expectAuthenticated();
+    expect(new URL(page.url()).origin, 'Post-login navigation must stay on the application origin').toBe(origin);
+
+    // Capture the live session, log out, then replay the old cookies.
+    const issuedCookies = await context.cookies(env.baseURL);
+    await workspacePage.logout();
+    await workspacePage.expectLoggedOut();
+
+    const replay = await browser.newContext({ baseURL: env.baseURL, storageState: { cookies: [], origins: [] } });
+    try {
+      await replay.addCookies(issuedCookies);
+      const replayPage = await replay.newPage();
+      const session = await replayPage.request.get('/api/v1/auth/get-session');
+      const body = await session.json().catch(() => null);
+      expect(body?.user ?? null, 'A logged-out session token must not authenticate again').toBeNull();
+
+      const replayWorkspace = new WorkspacePage(replayPage);
+      await replayWorkspace.goto();
+      await replayWorkspace.expectLoggedOut();
+    } finally {
+      await replay.close();
     }
   });
 });

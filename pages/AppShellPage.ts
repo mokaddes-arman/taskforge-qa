@@ -214,6 +214,182 @@ export class AppShellPage extends BasePage {
     throw lastError;
   }
 
+  // ------------------------------------------------ resilience (NFR-08)
+  /** Navigates without the module's readiness assertions (failure simulations). */
+  async openRaw(segment: string): Promise<void> {
+    await this.navigate(this.workspaceHref(segment));
+    await this.main.waitFor({ state: 'visible', timeout: 30_000 });
+  }
+
+  /**
+   * Plain navigation (no readiness checks) that recovers from a QA-022 bounce
+   * to /login by restoring the saved session once.
+   */
+  async navigateRecovering(segment: string): Promise<void> {
+    const target = this.workspaceHref(segment);
+    await this.navigate(target);
+    await this.page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => undefined);
+    if (this.currentPath() === '/login') {
+      await this.restoreSession?.();
+      await this.page.waitForTimeout(LOGIN_RATE_LIMIT_WAIT_MS);
+      await this.navigate(target);
+    }
+  }
+
+  /** User-facing copy shown when data could not be loaded. */
+  get errorState(): Locator {
+    return this.page
+      .getByText(/something went wrong|couldn['’]t load|could not load|failed to load|unable to load|try again|error loading|went wrong/i)
+      .first();
+  }
+
+  get tryAgainButton(): Locator {
+    return this.page.getByRole('button', { name: /try again/i }).first();
+  }
+
+  async expectErrorStateShown(): Promise<void> {
+    await expect(this.errorState, 'A friendly error/retry message is shown').toBeVisible({ timeout: 20_000 });
+  }
+
+  // ------------------------------------------------ global search (GEN-03)
+  get searchDialog(): Locator {
+    return this.page.getByRole('dialog', { name: 'Search' });
+  }
+
+  get searchSuggestions(): Locator {
+    return this.searchDialog.getByRole('listbox', { name: 'Suggestions' });
+  }
+
+  async openGlobalSearch(): Promise<void> {
+    await this.page.keyboard.press('Control+K');
+    await expect(this.searchDialog).toBeVisible();
+  }
+
+  /** Types a term into the open search dialog and returns the option labels. */
+  async globalSearchOptions(term: string): Promise<string[]> {
+    const input = this.searchDialog.getByRole('combobox');
+    await input.fill(term);
+    // cmdk filters synchronously, but give React a frame to re-render.
+    await expect(input).toHaveValue(term);
+    await this.page.waitForTimeout(300);
+    return (await this.searchSuggestions.getByRole('option').allTextContents()).map((t) => t.trim());
+  }
+
+  async expectGlobalSearchEmpty(): Promise<void> {
+    await expect(this.searchSuggestions).toContainText(/nothing found/i);
+  }
+
+  async chooseGlobalSearchOption(name: string): Promise<void> {
+    await this.searchSuggestions.getByRole('option', { name }).first().click();
+    await expect(this.searchDialog).toBeHidden();
+  }
+
+  async closeGlobalSearch(): Promise<void> {
+    await this.page.keyboard.press('Escape');
+    await expect(this.searchDialog).toBeHidden();
+  }
+
+  // ------------------------------------------- workspace switcher (GEN-04)
+  get workspaceSwitcherButton(): Locator {
+    return this.page.getByRole('button', { name: 'Switch workspace' });
+  }
+
+  get workspaceSwitcherMenu(): Locator {
+    return this.page.getByRole('menu', { name: 'Switch workspace' });
+  }
+
+  async openWorkspaceSwitcher(): Promise<string[]> {
+    await this.workspaceSwitcherButton.click();
+    await expect(this.workspaceSwitcherMenu).toBeVisible();
+    return (await this.workspaceSwitcherMenu.getByRole('menuitem').allTextContents()).map((t) => t.replace(/\s+/g, ' ').trim());
+  }
+
+  workspaceSwitcherItem(name: RegExp): Locator {
+    return this.workspaceSwitcherMenu.getByRole('menuitem', { name });
+  }
+
+  async closeMenu(): Promise<void> {
+    await this.page.keyboard.press('Escape');
+  }
+
+  // -------------------------------------------------------- theme (GEN-05)
+  async selectTheme(theme: 'Light' | 'Dark' | 'System'): Promise<void> {
+    await this.accountMenuButton.click();
+    await this.page.getByRole('menuitemradio', { name: theme, exact: true }).click();
+    await this.page.keyboard.press('Escape').catch(() => undefined);
+  }
+
+  async checkedTheme(): Promise<string> {
+    await this.accountMenuButton.click();
+    const checked = this.page.getByRole('menuitemradio', { checked: true });
+    await expect(checked).toHaveCount(1);
+    const name = ((await checked.textContent()) ?? '').trim();
+    await this.page.keyboard.press('Escape');
+    return name;
+  }
+
+  /** 'dark' or 'light' from the class applied to <html>. */
+  async appliedTheme(): Promise<'dark' | 'light'> {
+    return this.page.evaluate(() => (document.documentElement.classList.contains('dark') ? 'dark' : 'light'));
+  }
+
+  async reload(): Promise<void> {
+    await this.page.reload({ waitUntil: 'domcontentloaded' });
+    await this.waitForShell();
+  }
+
+  /**
+   * GEN-02: clicks a sidebar entry (client-side navigation) and verifies the
+   * route, a rendered page heading and the link's active state.
+   */
+  async openSidebarItemAndExpectActive(item: NavItem, settings = false): Promise<void> {
+    const link = settings ? this.settingsNavLink(item.label) : this.workspaceNavLink(item.label);
+    const target = this.workspaceHref(item.segment);
+
+    // A get-session 429 can bounce a valid session to /login (QA-022); recover
+    // through the saved session, as every other navigation in the suite does.
+    await this.retryOnLoginRedirect(target, async () => {
+      if (this.currentPath() !== target) {
+        await link.click();
+      }
+      await expect(this.page).toHaveURL(new RegExp(`${target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:[?#].*)?$`));
+      await expect(this.main.getByRole('heading').first(), `${item.label}: page heading`).toBeVisible();
+      await expect(link, `${item.label}: sidebar link marked current`).toHaveAttribute('aria-current', 'page');
+    }, 3);
+  }
+
+  /**
+   * Asserts a client-side navigation reached `target`. If the app bounced the
+   * valid session to /login?next=<target> (QA-022), records it and recovers.
+   */
+  async expectNavigatedTo(target: string): Promise<boolean> {
+    const pattern = new RegExp(`${target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:[?#].*)?$`);
+    await this.page.waitForURL((url) => pattern.test(url.pathname) || url.pathname === '/login', { timeout: 15_000 });
+    const url = new URL(this.page.url());
+    if (url.pathname === '/login') {
+      expect(url.searchParams.get('next'), 'The navigation targeted the expected page before the session bounce').toBe(target);
+      await this.restoreSession?.();
+      await this.gotoAuthenticated(target);
+      await expect(this.page).toHaveURL(pattern);
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * True when the page renders a not-found / access-denied state instead of
+   * workspace content (SEC-02 / GEN-07).
+   */
+  async showsNotFoundOrDenied(): Promise<boolean> {
+    const message = this.page
+      .getByText(
+        /not found|404|could not be found|doesn['’]t exist|does not exist|no access|don['’]t have access|not a member|access denied|forbidden/i,
+      )
+      .first();
+
+    return message.isVisible({ timeout: 5_000 }).catch(() => false);
+  }
+
   async waitForShell(timeout = 30_000): Promise<void> {
     await this.main.waitFor({ state: 'visible', timeout });
     await this.accountMenuButton.waitFor({ state: 'visible', timeout });

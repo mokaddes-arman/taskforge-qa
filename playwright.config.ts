@@ -4,6 +4,8 @@ import { env, STORAGE_STATE } from './utils/env';
 const AUTH_TEST = /00-auth\.spec\.ts/;
 const SETUP_TEST = /auth\.setup\.ts/;
 const MODULE_TEST = /(?:0[1-9]|1[0-9])-.*\.spec\.ts/;
+const ROLES_SETUP_TEST = /roles\.setup\.ts/;
+const RBAC_TEST = /2[0-9]-.*\.spec\.ts/;
 const EMPTY_STATE = { cookies: [], origins: [] };
 
 type BrowserName = 'chromium' | 'firefox' | 'webkit';
@@ -110,6 +112,26 @@ export default defineConfig({
         // Setup types the real password; keep it out of traces.
         trace: 'off',
       },
+    },
+    {
+      // Platform-admin login + impersonated Admin/Manager/Employee sessions.
+      name: 'setup-roles',
+      testMatch: ROLES_SETUP_TEST,
+      use: {
+        browserName: 'chromium',
+        channel: 'chrome',
+        storageState: EMPTY_STATE,
+        // Setup types the platform admin password; keep it out of traces.
+        trace: 'off',
+      },
+    },
+    {
+      // RBAC and platform-admin specs (20-*). Permission rules are server-side,
+      // so one browser is enough; storageState comes from fixtures/roles.fixture.
+      name: 'roles-chrome',
+      testMatch: RBAC_TEST,
+      dependencies: ['setup', 'setup-roles'],
+      use: { browserName: 'chromium', channel: 'chrome' },
     },
     moduleProject('modules-chrome', 'chromium', { channel: 'chrome' }),
     moduleProject('modules-firefox', 'firefox'),

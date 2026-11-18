@@ -41,3 +41,32 @@ export function ownerCredentials(): Credentials {
     password: env.ownerPassword,
   };
 }
+
+/** Workspace roles the RBAC suite exercises (besides the owner above). */
+export type WorkspaceRole = 'admin' | 'manager' | 'employee';
+
+export const SUPER_ADMIN_STATE = path.join(AUTH_DIR, 'super-admin.json');
+export const ROLE_STATES: Record<WorkspaceRole, string> = {
+  admin: path.join(AUTH_DIR, 'role-admin.json'),
+  manager: path.join(AUTH_DIR, 'role-manager.json'),
+  employee: path.join(AUTH_DIR, 'role-employee.json'),
+};
+
+/** Platform (super) admin credentials; the password is never echoed. */
+export function superAdminCredentials(): Credentials {
+  const email = (process.env.super_admin ?? '').trim();
+  const password = (process.env.super_admin_password ?? '').trim();
+  if (!email || !password) {
+    throw new Error('Missing super_admin and/or super_admin_password. Add both to .env at the project root.');
+  }
+  return { email, password };
+}
+
+/** Email of the QA account that holds `role` in the workspace (qa_<role>_email). */
+export function roleEmail(role: WorkspaceRole): string {
+  const email = (process.env[`qa_${role}_email`] ?? '').trim();
+  if (!email) {
+    throw new Error(`Missing qa_${role}_email in .env (see scripts/provision-role-accounts.cjs).`);
+  }
+  return email;
+}

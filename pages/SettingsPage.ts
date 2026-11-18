@@ -252,6 +252,14 @@ export class SettingsPage extends AppShellPage {
     await this.expectNoBrokenValues();
   }
 
+  /** INT-02: reads "<used> / <limit>" for a Plan & usage row (e.g. Members). */
+  async planUsage(label: 'Members' | 'Projects'): Promise<{ used: number; limit: number }> {
+    const text = (await this.main.innerText()).replace(/\r/g, '');
+    const match = text.match(new RegExp(String.raw`(?:^|\n)${label}\s*\n+\s*(\d+)\s*/\s*(\d+)`));
+    if (!match) throw new Error(`Plan usage row "${label}" not found`);
+    return { used: Number(match[1]), limit: Number(match[2]) };
+  }
+
   async expectNoBrokenValues(): Promise<void> {
     await expect(this.main).not.toContainText(/NaN|undefined|Invalid Date/);
   }

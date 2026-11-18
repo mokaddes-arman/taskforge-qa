@@ -79,6 +79,45 @@ export class EmployeesPage extends AppShellPage {
     await this.expectNoBrokenValues();
   }
 
+  /** Number of employees reported by the directory counter ("3 employees"). */
+  async employeeCount(): Promise<number> {
+    const text = (await this.count.textContent()) ?? '';
+    const match = text.match(/(\d+)\s+employees/);
+    if (!match) throw new Error(`Unexpected employee counter: "${text}"`);
+    return Number(match[1]);
+  }
+
+  async search(term: string): Promise<void> {
+    await this.searchInput.fill(term);
+  }
+
+  /** Parses "<shown> of <total> employees" while a search is active. */
+  async searchResultCount(): Promise<{ shown: number; total: number }> {
+    await expect(this.count).toContainText(/\d+ of \d+ employees/);
+    const match = ((await this.count.textContent()) ?? '').match(/(\d+) of (\d+) employees/)!;
+    return { shown: Number(match[1]), total: Number(match[2]) };
+  }
+
+  employeeLink(name: string): Locator {
+    return this.main.getByRole('link', { name });
+  }
+
+  /** "<shown> of <total> employees" while a search is active. */
+  async expectSearchCount(shown: number, total: number): Promise<void> {
+    await expect(this.count).toContainText(`${shown} of ${total} employees`);
+  }
+
+  /** E-08: triggers Export CSV and returns the downloaded file (read-only). */
+  async downloadExport(): Promise<{ filename: string; text: string }> {
+    const [download] = await Promise.all([
+      this.page.waitForEvent('download', { timeout: 30_000 }),
+      this.exportButton.click(),
+    ]);
+    const filePath = await download.path();
+    const { readFileSync } = await import('node:fs');
+    return { filename: download.suggestedFilename(), text: readFileSync(filePath, 'utf8') };
+  }
+
   async openAddEmployeesDialog(): Promise<void> {
     await this.addEmployeesButton.click();
     await expect(this.dialog).toBeVisible();

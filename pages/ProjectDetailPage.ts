@@ -259,6 +259,15 @@ export class ProjectDetailPage extends AppShellPage {
     });
   }
 
+  /**
+   * Reads the stored project description from the Settings form without
+   * editing it (SEC-04 / QA-002). Call after `goto('Settings')`.
+   */
+  async storedDescription(): Promise<string> {
+    await expect(this.descriptionInput).toBeVisible();
+    return this.descriptionInput.inputValue();
+  }
+
   async expectCurrentTab(tab: ProjectTab): Promise<void> {
     await expect(this.tabLink(tab)).toHaveAttribute('aria-current', 'page');
   }

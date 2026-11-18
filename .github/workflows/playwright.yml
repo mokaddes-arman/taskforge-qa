@@ -40,6 +40,11 @@ jobs:
       - name: Type check
         run: npm run typecheck
 
+      # Report redaction (QA-018) must never regress: secrets are masked in
+      # every report this public repository uploads.
+      - name: Unit tests (report redaction)
+        run: npm run test:unit
+
   e2e:
     name: E2E (Chrome)
     needs: typecheck
@@ -56,6 +61,16 @@ jobs:
       WORKSPACE_PATH: ${{ secrets.WORKSPACE_PATH || '/abdul-s-workspace' }}
       owner_email: ${{ secrets.OWNER_EMAIL }}
       owner_password: ${{ secrets.OWNER_PASSWORD }}
+      # Optional RBAC suite (tests/20-*, project roles-chrome). Runs only when
+      # the RUN_RBAC repository variable is 'true' and these secrets are set.
+      # Off by default: failure snapshots of the platform admin console would
+      # list user e-mails in the artifacts of this public repository.
+      RUN_RBAC: ${{ vars.RUN_RBAC }}
+      super_admin: ${{ secrets.SUPER_ADMIN }}
+      super_admin_password: ${{ secrets.SUPER_ADMIN_PASSWORD }}
+      qa_admin_email: ${{ secrets.QA_ADMIN_EMAIL }}
+      qa_manager_email: ${{ secrets.QA_MANAGER_EMAIL }}
+      qa_employee_email: ${{ secrets.QA_EMPLOYEE_EMAIL }}
 
     steps:
       - name: Check out repository
@@ -84,11 +99,21 @@ jobs:
           fi
 
       # One invocation so the HTML report, dashboard and bug report cover the
-      # auth and module projects together (the setup project runs as a
-      # dependency). Workers default to 2 on CI; override with the WORKERS
+      # auth, module (and optional RBAC) projects together; setup projects run
+      # as dependencies. Workers default to 2 on CI; override with the WORKERS
       # repository variable.
-      - name: Run Playwright tests (auth + modules, Chrome)
-        run: npx playwright test --project=auth-chrome --project=modules-chrome
+      - name: Run Playwright tests (auth + modules [+ RBAC], Chrome)
+        shell: bash
+        run: |
+          projects=(--project=auth-chrome --project=modules-chrome)
+          if [[ "${RUN_RBAC}" == "true" ]]; then
+            if [[ -z "${super_admin}" || -z "${super_admin_password}" || -z "${qa_admin_email}" || -z "${qa_manager_email}" || -z "${qa_employee_email}" ]]; then
+              echo "::error::RUN_RBAC is true but SUPER_ADMIN, SUPER_ADMIN_PASSWORD or QA_*_EMAIL secrets are missing."
+              exit 1
+            fi
+            projects+=(--project=roles-chrome)
+          fi
+          npx playwright test "${projects[@]}"
         env:
           WORKERS: ${{ vars.WORKERS }}
 

@@ -19,6 +19,28 @@ const stripAnsi = (s) => String(s || '').replace(/\u001b\[[0-9;]*m/g, '');
 // used. Drop any trailing tag tokens so the dashboard shows a clean title.
 const stripTags = (title) => String(title || '').replace(/(\s+@[\w-]+)+\s*$/, '').trim();
 
+// Playwright records `Fill "<value>"` step titles verbatim, so the sign-in
+// steps would otherwise print the real password into the bug report (and the
+// CI job summary). Mask every configured secret value in everything we write.
+const SECRET_ENV = /pass(word)?|secret|token|api[_-]?key/i;
+function secretValues() {
+  return Object.entries(process.env)
+    .filter(([name, value]) => SECRET_ENV.test(name) && typeof value === 'string' && value.trim().length >= 4)
+    .map(([, value]) => value.trim())
+    .sort((a, b) => b.length - a.length);
+}
+export function redactSecrets(text, secrets = secretValues()) {
+  let out = String(text ?? '');
+  // Longest first, so a secret that contains another is masked whole.
+  for (const secret of [...secrets].sort((a, b) => b.length - a.length)) {
+    out = out.split(secret).join('***');
+    // JSON.stringify / HTML escaping can change how the value is spelled.
+    const jsonForm = JSON.stringify(secret).slice(1, -1);
+    if (jsonForm !== secret) out = out.split(jsonForm).join('***');
+  }
+  return out;
+}
+
 function playwrightVersion() {
   try {
     const pkg = JSON.parse(
@@ -248,9 +270,13 @@ export default class DashboardReporter {
     for (const t of tests) delete t.actions;
 
     fs.mkdirSync(dashboardDir, { recursive: true });
-    fs.writeFileSync(this.outputFile, this._html(payload));
-    fs.writeFileSync(path.join(dashboardDir, 'bug-report.md'), markdown);
-    fs.writeFileSync(path.join(dashboardDir, 'bug-report.json'), JSON.stringify(payload.bugReport, null, 2));
+    const secrets = secretValues();
+    fs.writeFileSync(this.outputFile, redactSecrets(this._html(payload), secrets));
+    fs.writeFileSync(path.join(dashboardDir, 'bug-report.md'), redactSecrets(markdown, secrets));
+    fs.writeFileSync(
+      path.join(dashboardDir, 'bug-report.json'),
+      redactSecrets(JSON.stringify(payload.bugReport, null, 2), secrets)
+    );
     fs.writeFileSync(historyPath, JSON.stringify(nextHistory, null, 2));
     fs.writeFileSync(
       path.join(dashboardDir, 'last-run.json'),

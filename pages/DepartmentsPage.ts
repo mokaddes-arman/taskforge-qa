@@ -55,7 +55,8 @@ export class DepartmentsPage extends AppShellPage {
     await expect(this.dialog).toBeVisible();
   }
 
-  async expectNewDepartmentDialog(): Promise<void> {
+  /** `memberCount`: workspace members, one checkbox each in the member picker. */
+  async expectNewDepartmentDialog(memberCount: number): Promise<void> {
     await expect(this.dialog).toBeVisible();
     await expect(
       this.dialog.getByRole('heading', {
@@ -77,7 +78,7 @@ export class DepartmentsPage extends AppShellPage {
         exact: true,
       }),
     ).toBeVisible();
-    await expect(this.dialog.locator('input[type="checkbox"]')).toHaveCount(3);
+    await expect(this.dialog.locator('input[type="checkbox"]')).toHaveCount(memberCount);
   }
 
   async cancelNewDepartmentDialog(): Promise<void> {
@@ -85,6 +86,17 @@ export class DepartmentsPage extends AppShellPage {
       .getByRole('button', { name: 'Cancel', exact: true })
       .click();
     await expect(this.dialog).toBeHidden();
+  }
+
+  /** INT-08: "<department>" -> member count, read from the department list. */
+  async memberCounts(): Promise<Record<string, number>> {
+    const lines = (await this.main.innerText()).split(/\n/).map((line) => line.trim()).filter(Boolean);
+    const counts: Record<string, number> = {};
+    lines.forEach((line, index) => {
+      const match = line.match(/^(\d+) members?$/);
+      if (match && index > 0) counts[lines[index - 1]] = Number(match[1]);
+    });
+    return counts;
   }
 
   async expectNoBrokenValues(): Promise<void> {

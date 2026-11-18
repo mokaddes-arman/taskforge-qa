@@ -1,4 +1,5 @@
 import { test, expect } from '../fixtures/pages.fixture';
+import { TaskForgeApi, WS_API } from '../utils/api';
 
 /**
  * Module 15 — Departments.
@@ -21,12 +22,14 @@ test.describe('Departments (Module 15)', () => {
 
   test('opens the new-department dialog and cancels without creating', async ({
     departmentsPage,
+    request,
   }) => {
+    const members = await new TaskForgeApi(request).data<unknown[]>(`${WS_API}/members`);
     await departmentsPage.goto();
     await departmentsPage.expectLoaded();
 
     await departmentsPage.openNewDepartmentDialog();
-    await departmentsPage.expectNewDepartmentDialog();
+    await departmentsPage.expectNewDepartmentDialog(members.length);
     await departmentsPage.cancelNewDepartmentDialog();
   });
 });

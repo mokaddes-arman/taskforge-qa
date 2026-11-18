@@ -5,6 +5,16 @@ import {
   type NavigationRetryOptions,
 } from '../utils/navigation';
 
+export interface FocusInfo {
+  tag: string;
+  name: string;
+  inMain: boolean;
+  inNav: boolean;
+  inDialog: boolean;
+  visible: boolean;
+  focusIndicator: boolean;
+}
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -88,6 +98,58 @@ export class BasePage {
     }));
 
     return metrics.scrollWidth > metrics.clientWidth + 1;
+  }
+
+  // ------------------------------------------------ accessibility probes
+  /** Document-level semantics checked by A11Y-05. */
+  async documentSemantics(): Promise<{ lang: string; title: string; mainLandmarks: number }> {
+    return this.page.evaluate(() => ({
+      lang: document.documentElement.lang,
+      title: document.title.trim(),
+      mainLandmarks: [...document.querySelectorAll('main, [role="main"]')].filter(
+        (el) => (el as HTMLElement).offsetParent !== null || getComputedStyle(el).position === 'fixed',
+      ).length,
+    }));
+  }
+
+  async pressKey(key: string): Promise<void> {
+    await this.page.keyboard.press(key);
+  }
+
+  /** Describes the focused element: name, landmark and whether focus is visible (WCAG 2.4.7). */
+  async activeElementInfo(): Promise<FocusInfo> {
+    return this.page.evaluate(() => {
+      const el = document.activeElement as HTMLElement | null;
+      if (!el || el === document.body) {
+        return { tag: 'body', name: '', inMain: false, inNav: false, inDialog: false, visible: false, focusIndicator: false };
+      }
+      const rect = el.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      const indicator =
+        (style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0) ||
+        (style.boxShadow !== 'none' && style.boxShadow !== '');
+      const name = (el.getAttribute('aria-label') || el.textContent || el.getAttribute('title') || el.getAttribute('placeholder') || '')
+        .replace(/\s+/g, ' ').trim().slice(0, 60);
+      return {
+        tag: el.tagName.toLowerCase(),
+        name,
+        inMain: !!el.closest('main, [role="main"]'),
+        inNav: !!el.closest('nav, [role="navigation"]'),
+        inDialog: !!el.closest('[role="dialog"], [role="alertdialog"]'),
+        visible: rect.width > 0 && rect.height > 0,
+        focusIndicator: indicator,
+      };
+    });
+  }
+
+  /** Presses Tab `count` times and returns where focus landed after each press. */
+  async tabSequence(count: number): Promise<FocusInfo[]> {
+    const stops: FocusInfo[] = [];
+    for (let index = 0; index < count; index += 1) {
+      await this.page.keyboard.press('Tab');
+      stops.push(await this.activeElementInfo());
+    }
+    return stops;
   }
 
   async expectNoHorizontalOverflow(): Promise<void> {

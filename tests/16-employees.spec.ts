@@ -21,12 +21,35 @@ test.describe('Employees (Module 16)', () => {
   }) => {
     await employeesPage.goto();
     await employeesPage.expectLoaded();
+    // Read the live total: membership changes (e.g. the RBAC role accounts).
+    const total = await employeesPage.employeeCount();
 
     await employeesPage.searchInput.fill('zzzz-no-match');
-    await expect(employeesPage.count).toContainText('0 of 3 employees');
+    await expect(employeesPage.count).toContainText(`0 of ${total} employees`);
 
     await employeesPage.searchInput.fill('');
-    await expect(employeesPage.count).toContainText('3 employees');
+    await expect(employeesPage.count).toContainText(`${total} employees`);
+  });
+
+  test('E-04: search finds employees by name and email, case-insensitively', async ({
+    employeesPage,
+    credentials,
+  }) => {
+    await employeesPage.goto();
+    await employeesPage.expectLoaded();
+    const total = await employeesPage.employeeCount();
+
+    for (const term of ['ABDUL MOKADDES', 'abdul mokaddes', credentials.email.toUpperCase()]) {
+      await employeesPage.search(term);
+      const result = await employeesPage.searchResultCount();
+      expect(result.total, `"${term}": total stays the directory size`).toBe(total);
+      expect(result.shown, `"${term}" matches at least one employee`).toBeGreaterThanOrEqual(1);
+      expect(result.shown, `"${term}" narrows the list`).toBeLessThan(total);
+      await expect(employeesPage.employeeLink('Abdul Mokaddes Arman')).toBeVisible();
+    }
+
+    await employeesPage.search('');
+    await expect(employeesPage.count).toContainText(`${total} employees`);
   });
 
   test('opens the add-members dialog and cancels without adding', async ({

@@ -54,6 +54,44 @@ export class LoginPage extends BasePage {
     }
   }
 
+  /**
+   * Opens /login with the application scripts blocked, i.e. the state before
+   * React hydrates (or with JavaScript disabled). Used by SEC-16 / QA-012.
+   */
+  async gotoWithoutScripts(): Promise<void> {
+    await this.page.route(/\/_next\/static\/.*\.js(\?|$)/, (route) => route.abort());
+    await this.navigate('/login');
+    await this.waitForForm();
+  }
+
+  /**
+   * Aborts sign-in API calls in the browser and records them, so validation
+   * tests never reach the server or consume the sign-in rate limit.
+   */
+  async blockSignInApi(): Promise<string[]> {
+    const attempts: string[] = [];
+    await this.page.route(/\/api\/v1\/auth\/sign-in\//, async (route) => {
+      attempts.push(new URL(route.request().url()).pathname);
+      await route.abort('blockedbyclient');
+    });
+    return attempts;
+  }
+
+  /** Opens /login with extra query parameters (e.g. a redirect target). */
+  async gotoWithQuery(query: string): Promise<void> {
+    await this.navigate(`/login?${query}`);
+    await this.waitForForm();
+    await this.waitForHydration();
+  }
+
+  /** Submits the form and waits for the browser to leave or reload /login. */
+  async submitAndWaitForNavigation(): Promise<void> {
+    await Promise.all([
+      this.page.waitForURL((url) => url.search.length > 0 || url.pathname !== '/login', { timeout: 15_000 }).catch(() => undefined),
+      this.submitButton.click(),
+    ]);
+  }
+
   async waitForForm(): Promise<void> {
     await this.emailInput.waitFor({ state: 'visible', timeout: 15_000 });
   }
@@ -108,9 +146,32 @@ export class LoginPage extends BasePage {
     await this.passwordInput.fill(password);
   }
 
+  /**
+   * Types a real secret without recording it. Playwright titles every input
+   * action with its value (`Fill "<value>"`, `Type "<value>"`, `Insert "<value>"`)
+   * in the HTML report, traces and custom reporters, which leaked the owner
+   * password into published CI artifacts. Setting the value through the native
+   * setter and dispatching input/change events works with React-controlled
+   * inputs and is recorded only as `Evaluate`.
+   */
+  async fillSecretPassword(secret: string): Promise<void> {
+    await this.passwordInput.evaluate((el, value) => {
+      const input = el as HTMLInputElement;
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+      input.focus();
+      if (setter) setter.call(input, value);
+      else input.value = value;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    }, secret);
+    // Compare lengths only so a failed assertion never prints the secret.
+    const length = await this.passwordInput.evaluate((el) => (el as HTMLInputElement).value.length);
+    expect(length, 'password field holds the full secret').toBe(secret.length);
+  }
+
   async fillCredentials(credentials: Credentials): Promise<void> {
     await this.fillEmail(credentials.email);
-    await this.fillPassword(credentials.password);
+    await this.fillSecretPassword(credentials.password);
   }
 
   async submit(): Promise<void> {
